@@ -233,9 +233,9 @@ class App extends React.Component {
 
     // ---------- HEADER ----------
     const brandLogo = R('img', {
-      src: './assets/logo.svg',
-      alt: 'Spotler Activate',
-      style: { height: 40, width: 'auto', display: 'block', flex: 'none' },
+      src: './assets/spotler-logo.svg',
+      alt: 'Spotler',
+      style: { height: 32, width: 'auto', display: 'block', flex: 'none' },
     });
 
     const industrySwitch = R('div', {
