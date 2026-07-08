@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 169 84" width="169" height="84" role="img" aria-label="Spotler Activate">
+  <circle cx="30" cy="42" r="26" fill="none" stroke="#002a4d" stroke-width="4"/>
+  <circle cx="30" cy="42" r="17" fill="none" stroke="#23afe6" stroke-width="4"/>
+  <circle cx="30" cy="42" r="7" fill="#f0e306"/>
+  <text x="66" y="34" font-family="'Open Sans', system-ui, sans-serif" font-size="12" font-weight="700" letter-spacing="2" fill="#6b7a89">SPOTLER</text>
+  <text x="65" y="56" font-family="'Open Sans', system-ui, sans-serif" font-size="20" font-weight="800" letter-spacing="-0.3" fill="#002a4d">Activate</text>
+</svg>
