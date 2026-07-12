@@ -22,6 +22,7 @@ class App extends React.Component {
     tableSort: { key: 'number', dir: 'asc' },
     pitch: [],         // starred use case ids
     pitchCopied: false,
+    expandedCards: [], // use case ids expanded to the tier-2 "quick why" state
   };
 
   componentDidMount() {
@@ -51,6 +52,7 @@ class App extends React.Component {
     if (q.view) s.view = q.view;
     if (q.open) s.open = q.open;
     if (q.pitch) s.pitch = q.pitch.split(',').filter(Boolean);
+    if (q.expanded) s.expandedCards = q.expanded.split(',').filter(Boolean);
     if (q.lang) s.lang = q.lang;
     this.setState(s);
   }
@@ -70,6 +72,7 @@ class App extends React.Component {
     if (s.view !== 'cards') put('view', s.view);
     put('open', s.open);
     put('pitch', s.pitch);
+    put('expanded', s.expandedCards);
     const h = parts.join('&');
     const target = h ? '#' + h : window.location.pathname + window.location.search;
     if (window.location.hash.replace(/^#/, '') !== h) {
@@ -463,15 +466,35 @@ class App extends React.Component {
       );
     };
 
+    // Tier-2 "quick why" is a digest, not the full-detail text — trim to the
+    // first sentence (with a hard length cap as a safety net for run-on
+    // sentences) rather than showing the whole problem/how paragraph.
+    const digest = (text, max) => {
+      max = max || 120;
+      if (!text) return text;
+      const m = text.match(/^[^.!?]*[.!?]+/);
+      let s = m ? m[0].trim() : text;
+      if (s.length > max) s = s.slice(0, max - 1).trim() + '…';
+      return s;
+    };
+
+    const chevron = (expanded) => R('svg', {
+      width: 12, height: 12, viewBox: '0 0 24 24', fill: 'none',
+      style: { flex: 'none', transform: expanded ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform .18s ease-out' },
+    }, R('path', { d: 'M6 9l6 6 6-6', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }));
+
     const card = (u) => {
       const c = courseById(u.course);
       const m = u.metrics[this.state.industry];
       const starred = this.state.pitch.includes(u.id);
+      const expanded = this.state.expandedCards.includes(u.id);
+      const toggle = () => this.toggleIn('expandedCards', u.id);
       return R('article', {
         key: u.id,
-        onClick: () => this.set({ open: u.id }),
+        onClick: toggle,
         tabIndex: 0,
-        onKeyDown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this.set({ open: u.id }); } },
+        'aria-expanded': expanded,
+        onKeyDown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } },
         style: {
           position: 'relative',
           display: 'flex', flexDirection: 'column',
@@ -499,6 +522,8 @@ class App extends React.Component {
           },
         }, R('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: starred ? B.navy : 'none' },
           R('path', { d: 'M12 2l3 6.5 7 1-5 5 1.2 7L12 18l-6.2 3.5L7 14 2 9l7-1z', stroke: B.navy, strokeWidth: 1.5, strokeLinejoin: 'round' }))),
+
+        // ---- TIER 1 — closed card: name, hook, hero metric only ----
         R('div', { style: { padding: '20px 20px 16px 24px' } },
           R('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
             R('div', {
@@ -514,25 +539,62 @@ class App extends React.Component {
           ),
           R('h3', { style: { margin: '14px 0 4px', fontSize: 18, fontWeight: 800, color: B.navy, letterSpacing: '-0.01em', lineHeight: 1.2 } }, u.name),
           R('div', { style: { fontSize: 13, color: B.cyan_shade, fontStyle: 'italic', marginBottom: 12 } }, u.hook),
-          R('div', { style: { marginBottom: 12 } }, metricPill(m, u.type, true)),
-          R('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 6 } },
-            Chip({ children: u.lifecycle, upper: false, bg: '#f2f6f9' }),
-            Chip({ children: u.setup === 'core' ? T('Core') : T('Add-on'), bg: u.setup === 'core' ? B.navy_tint : '#f2ecff', color: u.setup === 'core' ? B.navy : '#4a2fa8' }),
-            Chip({ children: u.capability, bg: '#fff', border: '1px dashed ' + B.line }),
+          R('div', {}, metricPill(m, u.type, true)),
+        ),
+
+        // ---- TIER 2 — expanded "quick why": animates open in place ----
+        R('div', {
+          style: {
+            display: 'grid',
+            gridTemplateRows: expanded ? '1fr' : '0fr',
+            transition: 'grid-template-rows .22s ease-out',
+          },
+        },
+          R('div', { style: { overflow: 'hidden' } },
+            R('div', { style: { padding: '0 20px 16px 24px', display: 'flex', flexDirection: 'column', gap: 10 } },
+              R('div', {},
+                R('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: B.muted, marginBottom: 3 } }, T('The problem')),
+                R('div', { style: { fontSize: 13, color: B.ink, lineHeight: 1.4 } }, digest(u.problem)),
+              ),
+              R('div', {},
+                R('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: B.muted, marginBottom: 3 } }, T('How Spotler Activate does it')),
+                R('div', { style: { fontSize: 13, color: B.ink, lineHeight: 1.4 } }, digest(u.how)),
+              ),
+              R('div', { style: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' } },
+                R('svg', { width: 13, height: 13, viewBox: '0 0 24 24', fill: 'none', style: { color: B.muted, flex: 'none' } },
+                  R('path', { d: 'M9 6V3M15 6V3M6 11h12M8 11v6a3 3 0 003 3h2a3 3 0 003-3v-6', stroke: 'currentColor', strokeWidth: 1.6, strokeLinecap: 'round' })),
+                u.needs.map(n => Chip({ children: n, bg: '#fff', border: '1px solid ' + B.line, color: B.muted, key: n })),
+              ),
+              u.solves.length > 0 && R('div', { style: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' } },
+                R('span', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: B.muted, flex: 'none' } }, T('Solves')),
+                u.solves.slice(0, 2).map(s => Chip({ children: s.label, bg: '#fffdea', border: '1px solid ' + B.yellow, color: B.navy, key: s.sub_id })),
+                u.solves.length > 2 && Chip({ children: '+' + (u.solves.length - 2), bg: '#fffdea', border: '1px solid ' + B.yellow, color: B.navy }),
+              ),
+              R('button', {
+                onClick: (e) => { e.stopPropagation(); this.set({ open: u.id }); },
+                style: {
+                  alignSelf: 'flex-start', border: 0, background: 'transparent', padding: 0,
+                  color: B.cyan_shade, fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                },
+              }, T('Full details') + ' →'),
+            ),
           ),
         ),
-        R('div', { style: { marginTop: 'auto', padding: '12px 20px 16px 24px', borderTop: '1px solid ' + B.line, background: '#fafcfd', display: 'flex', flexDirection: 'column', gap: 8 } },
-          R('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
-            R('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', style: { color: B.muted, flex: 'none' } },
-              R('path', { d: 'M9 6V3M15 6V3M6 11h12M8 11v6a3 3 0 003 3h2a3 3 0 003-3v-6', stroke: 'currentColor', strokeWidth: 1.6, strokeLinecap: 'round' })),
-            R('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 4 } }, u.needs.map(n => Chip({ children: n, bg: '#fff', border: '1px solid ' + B.line, color: B.muted, key: n }))),
-          ),
-          u.solves.length > 0 && R('div', { style: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' } },
-            R('span', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: B.muted } }, T('Solves')),
-            u.solves.slice(0, 2).map(s => Chip({ children: s.label, bg: '#fffdea', border: '1px solid ' + B.yellow, color: B.navy, key: s.sub_id })),
-            u.solves.length > 2 && Chip({ children: '+' + (u.solves.length - 2), bg: '#fffdea', border: '1px solid ' + B.yellow, color: B.navy }),
-          ),
-        ),
+
+        // ---- expand affordance — obvious, always visible ----
+        R('button', {
+          onClick: (e) => { e.stopPropagation(); toggle(); },
+          'aria-expanded': expanded,
+          'aria-label': expanded ? T('Show less') : T('See how'),
+          style: {
+            marginTop: expanded ? 0 : 'auto',
+            width: '100%', border: 0, borderTop: '1px solid ' + B.line,
+            background: expanded ? '#fafcfd' : '#fff', color: B.cyan_shade,
+            padding: '10px 20px', cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+            fontSize: 12, fontWeight: 700,
+          },
+        }, R('span', {}, expanded ? T('Show less') : T('See how')), chevron(expanded)),
       );
     };
 

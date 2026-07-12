@@ -109,6 +109,9 @@ window.NL_STRINGS = {
   "Remove filter": "Filter verwijderen",
   "Add to pitch": "Toevoegen aan pitch",
   "Remove from pitch": "Uit pitch verwijderen",
+  "See how": "Bekijk hoe",
+  "Show less": "Toon minder",
+  "Full details": "Volledige details",
 
   // Empty state
   "No use cases match these filters": "Geen use cases voldoen aan deze filters",
