@@ -87,6 +87,11 @@ class App extends React.Component {
     const next = arr.includes(val) ? arr.filter(x => x !== val) : [...arr, val];
     this.set({ [key]: next });
   }
+  // Accordion: expanding a card's "quick why" tier closes any other open one.
+  toggleCardExpand(id) {
+    const cur = this.state.expandedCards;
+    this.set({ expandedCards: cur.includes(id) ? [] : [id] });
+  }
 
   onKey(e) {
     if (!this.state.open) return;
@@ -465,7 +470,7 @@ class App extends React.Component {
       const m = u.metrics[this.state.industry];
       const starred = this.state.pitch.includes(u.id);
       const expanded = this.state.expandedCards.includes(u.id);
-      const toggle = () => this.toggleIn('expandedCards', u.id);
+      const toggle = () => this.toggleCardExpand(u.id);
       return R('article', {
         key: u.id,
         onClick: toggle,
@@ -550,10 +555,13 @@ class App extends React.Component {
               R('button', {
                 onClick: (e) => { e.stopPropagation(); this.set({ open: u.id }); },
                 style: {
-                  alignSelf: 'flex-start', border: 0, background: 'transparent', padding: 0,
+                  alignSelf: 'flex-start', marginTop: 4,
+                  border: '1px solid ' + B.cyan, background: B.cyan_tint, borderRadius: 8,
+                  padding: '8px 14px',
                   color: B.cyan_shade, fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                  display: 'inline-flex', alignItems: 'center', gap: 6,
                 },
-              }, T('Full details') + ' →'),
+              }, T('Full details'), R('span', { 'aria-hidden': true }, '→')),
             ),
           ),
         ),
@@ -601,7 +609,7 @@ class App extends React.Component {
           R('div', { style: { width: 32, height: 3, background: B.yellow, borderRadius: 2, marginTop: 8 } }),
         ),
       ),
-      R('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 18 } }, items.map(card)),
+      R('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 18, alignItems: 'start' } }, items.map(card)),
     ));
 
     // ---------- TABLE ----------
@@ -795,25 +803,31 @@ class App extends React.Component {
         const c = courseById(u.course);
         const m = u.metrics[this.state.industry];
         drawer = R('div', {
-          style: { position: 'fixed', inset: 0, zIndex: 100, animation: 'ucm-fade .18s ease-out' },
+          style: {
+            position: 'fixed', inset: 0, zIndex: 100,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: '4vh 20px',
+            animation: 'ucm-fade .18s ease-out',
+          },
           role: 'dialog', 'aria-modal': true, 'aria-label': u.name,
         },
           R('div', {
             onClick: () => this.set({ open: null }),
-            style: { position: 'absolute', inset: 0, background: 'rgba(0,42,77,0.35)', backdropFilter: 'blur(4px)' },
+            style: { position: 'absolute', inset: 0, background: 'rgba(0,42,77,0.45)', backdropFilter: 'blur(4px)' },
           }),
           R('div', {
             style: {
-              position: 'absolute', top: 0, right: 0, bottom: 0,
-              width: 'min(640px, 92vw)', background: '#fff',
-              boxShadow: '-24px 0 60px rgba(0,42,77,0.25)',
-              display: 'flex', flexDirection: 'column',
-              animation: 'ucm-slidein .22s cubic-bezier(0.22,0.61,0.36,1)',
+              position: 'relative',
+              width: 'min(1040px, 96vw)', maxHeight: '90vh',
+              background: '#fff', borderRadius: 24,
+              boxShadow: '0 40px 100px rgba(0,42,77,0.35)',
+              display: 'flex', flexDirection: 'column', overflow: 'hidden',
+              animation: 'ucm-pop .22s cubic-bezier(0.22,0.61,0.36,1)',
             },
           },
             // header
-            R('div', { style: { padding: '24px 28px 20px', borderBottom: '1px solid ' + B.line, position: 'relative' } },
-              R('div', { style: { position: 'absolute', left: 0, top: 24, bottom: 20, width: 5, background: c.color } }),
+            R('div', { style: { padding: '32px 36px 24px', borderBottom: '1px solid ' + B.line, position: 'relative' } },
+              R('div', { style: { position: 'absolute', left: 0, top: 28, bottom: 24, width: 5, background: c.color } }),
               R('div', { style: { display: 'flex', gap: 16, alignItems: 'flex-start' } },
                 R('div', {
                   style: {
@@ -844,7 +858,7 @@ class App extends React.Component {
               ),
             ),
             // body
-            R('div', { style: { flex: 1, overflowY: 'auto', padding: '24px 28px 8px' } },
+            R('div', { style: { flex: 1, overflowY: 'auto', padding: '28px 36px 12px' } },
               // -- mockup hero --
               (() => {
                 const icpMap = { commerce: 'commerce', travel: 'travel', culture: 'leisure' };
@@ -914,7 +928,7 @@ class App extends React.Component {
               ),
             ),
             // footer
-            R('div', { style: { padding: '18px 28px 22px', borderTop: '1px solid ' + B.line, background: '#fafcfd' } },
+            R('div', { style: { padding: '20px 36px 28px', borderTop: '1px solid ' + B.line, background: '#fafcfd' } },
               R('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 20 } },
                 R('div', { style: { flex: 1, minWidth: 200 } },
                   R('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: B.muted, marginBottom: 8 } }, T('Needs')),
