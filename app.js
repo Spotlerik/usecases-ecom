@@ -241,27 +241,6 @@ class App extends React.Component {
       style: { height: 32, width: 'auto', display: 'block', flex: 'none' },
     });
 
-    const industrySwitch = R('div', {
-      role: 'radiogroup', 'aria-label': 'Industry',
-      style: { display: 'inline-flex', padding: 4, background: '#f2f6f9', borderRadius: 999, border: '1px solid ' + B.line }
-    }, d.industries.map(ind => {
-      const active = this.state.industry === ind.id;
-      return R('button', {
-        key: ind.id,
-        role: 'radio', 'aria-checked': active,
-        onClick: () => this.set({ industry: ind.id }),
-        style: {
-          border: 0, cursor: 'pointer',
-          padding: '8px 18px', borderRadius: 999,
-          fontSize: 13, fontWeight: 700,
-          background: active ? B.navy : 'transparent',
-          color: active ? '#fff' : B.ink,
-          transition: 'background .18s, color .18s',
-        },
-      }, R('span', { style: { display: 'block', lineHeight: 1 } }, ind.label),
-         R('span', { style: { display: 'block', fontSize: 10, fontWeight: 500, opacity: active ? 0.75 : 0.55, marginTop: 3 } }, ind.sublabel));
-    }));
-
     const header = R('header', {
       style: {
         position: 'sticky', top: 0, zIndex: 40,
@@ -294,8 +273,6 @@ class App extends React.Component {
               textTransform: 'uppercase',
             }
           }, lg))),
-        R('div', { style: { fontSize: 11, fontWeight: 700, color: B.muted, letterSpacing: '0.14em', textTransform: 'uppercase' } }, T('Industry')),
-        industrySwitch,
       ),
     ));
 
