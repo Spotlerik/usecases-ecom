@@ -149,6 +149,10 @@ window.NL_STRINGS = {
   "All figures are illustrative benchmarks for positioning, never a customer guarantee. Always validate against the prospect’s own baseline.":
     "Alle cijfers zijn illustratieve benchmarks voor positionering, nooit een garantie. Valideer altijd tegen de eigen baseline van de prospect.",
   "© Spotler · ": "© Spotler · ",
+  "Questions or remarks?": "Vragen of opmerkingen?",
+  "Contact Erik de Kock — preferably via Teams, or by email.": "Neem contact op met Erik de Kock - het liefst via Teams, of per e-mail.",
+  "Chat on Teams": "Chat via Teams",
+  "Email": "E-mail",
   "Loading…": "Laden...",
 
   // ---------- Lifecycle stages ----------
