@@ -1078,5 +1078,763 @@ class App extends React.Component {
   }
 }
 
-const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(React.createElement(App));
+// ============================================================
+// Demo module — Routes  #/usecase/:id
+// ============================================================
+
+// ─── Helpers ────────────────────────────────────────────────
+function ucBenchmark(ucId, industry) {
+  const d = window.USE_CASES;
+  const u = d && d.use_cases && d.use_cases.find(function(x){ return x.id === ucId; });
+  if (!u) return '';
+  const m = u.metrics && (u.metrics[industry] || u.metrics.commerce);
+  if (!m) return '';
+  return m.value + ' ' + m.label;
+}
+function ucExample(ucId, industry) {
+  const d = window.USE_CASES;
+  const u = d && d.use_cases && d.use_cases.find(function(x){ return x.id === ucId; });
+  if (!u) return '';
+  return (u.examples && (u.examples[industry] || u.examples.commerce)) || '';
+}
+
+// ─── Catalogue helpers ───────────────────────────────────────
+function _deriveSizes(p) {
+  // Fallback for stale catalogues without .sizes
+  const cat = (p.category || '').toLowerCase();
+  if (cat === 'accessories') return ['One size'];
+  return ['XS','S','M','L','XL'];
+}
+function _getSizes(p) { return (p.sizes && p.sizes.length) ? p.sizes : _deriveSizes(p); }
+
+// ─── sidePanel — shared Activate 360° profile shell ─────────
+// (currently rendered inline in uc08; stub kept for future use cases)
+function sidePanel(config) { return config; }
+
+// ─── STAGE ──────────────────────────────────────────────────
+const STAGE = {
+  // 17 stubs — filled by other sessions
+  'email-capture': null, 'profile-enrichment': null,
+  'email-recognition': null, 'rt-segmentation': null,
+  'rec-onsite': null, 'rec-email': null,
+  'abandoned-cart': null, 'browse-abandonment': null,
+  'website-reminder': null, 'online-retargeting': null,
+  'back-in-stock': null, 'pers-homepage': null,
+  'persuasive-popups': null, 'persuasive-product': null,
+  'rec-crosssell': null, 'followup-loyalty': null,
+  'predictive-clv': null,
+
+  // ── UC08 — Recommend similar products ─────────────────────
+  'rec-matching': function(el) {
+    el.className = 'demo-root';
+
+    const P = (window.PRODUCTS || []);
+
+    // ── Persona (derived from catalogue) ────────────────────
+    const personaBrand    = 'Noreen';
+    const personaCat      = 'Coats';
+    const personaColour   = 'Black';
+    const personaSize     = 'M';
+    const personaEmail    = 'robin.jansen@example.com';
+    const personaName     = 'Robin Jansen';
+    const personaId       = '2';
+
+    // Near-miss: highest-popularity coat, brand≠Noreen, colour≠Black, in_stock
+    const nearMissPool = P.filter(function(p) {
+      return p.category === personaCat &&
+             p.brand !== personaBrand &&
+             p.colour !== personaColour &&
+             p.in_stock;
+    }).sort(function(a, b) { return b.popularity - a.popularity; });
+    const pdp = nearMissPool[0] ||
+                P.filter(function(p) { return p.category === personaCat && p.in_stock; })
+                 .sort(function(a, b) { return b.popularity - a.popularity; })[0] ||
+                P[0];
+
+    // ── Demo state (in memory only) ─────────────────────────
+    const state = {
+      filterSource: 'event',       // 'event' | 'profile' | 'both'
+      selectionMethod: 'like',     // 'like' | 'crosssell'
+      useProductRelations: true,   // true = rank by pdp relations; false = profile affinity
+      maxProducts: 4,
+      fallbackSet: 'most-sold',    // 'most-sold' | 'newest' | 'none'
+      activeTab: 'product-sets',   // Activate panel tab
+    };
+
+    // ── Algorithm ───────────────────────────────────────────
+    function _filterCandidates(s) {
+      const base = P.filter(function(p) { return p.id !== pdp.id; });
+      if (s.filterSource === 'event') {
+        return base.filter(function(p) { return p.category === pdp.category; });
+      }
+      if (s.filterSource === 'profile') {
+        return base.filter(function(p) {
+          return p.brand === personaBrand && _getSizes(p).indexOf(personaSize) !== -1;
+        });
+      }
+      // both
+      return base.filter(function(p) {
+        return p.category === pdp.category &&
+               p.brand === personaBrand &&
+               _getSizes(p).indexOf(personaSize) !== -1;
+      });
+    }
+
+    function _scoreProduct(p, s) {
+      let score = p.popularity;
+      const pdpPairs = pdp.pairs_with || [];
+      if (s.useProductRelations) {
+        // rank by relationship to viewed product
+        if (pdpPairs.indexOf(p.id) !== -1) score += 40;
+        if (p.category === pdp.category) score += 20;
+        if (p.brand === pdp.brand) score += 15;
+        if (p.colour === pdp.colour) score += 10;
+      } else {
+        // rank by profile affinity
+        if (p.brand === personaBrand) score += 40;
+        if (p.category === personaCat) score += 25;
+        if (p.colour === personaColour) score += 20;
+        if (_getSizes(p).indexOf(personaSize) !== -1) score += 15;
+      }
+      if (p.in_stock) score += 5;
+      return score;
+    }
+
+    function _getFallback(usedIds, s) {
+      if (s.fallbackSet === 'none') return [];
+      const candidates = P.filter(function(p) {
+        return p.in_stock && p.id !== pdp.id && usedIds.indexOf(p.id) === -1;
+      });
+      if (s.fallbackSet === 'most-sold') {
+        return candidates.sort(function(a, b) { return b.popularity - a.popularity; });
+      }
+      // newest — use reverse catalogue order as proxy
+      return candidates.slice().reverse();
+    }
+
+    function _resolveGrid(s) {
+      const candidates = _filterCandidates(s)
+        .map(function(p) { return { p: p, score: _scoreProduct(p, s) }; })
+        .sort(function(a, b) { return b.score - a.score; })
+        .map(function(x) { return x.p; });
+
+      const max = Math.max(0, Math.min(8, s.maxProducts));
+      const primary = candidates.slice(0, max);
+      const primaryIds = primary.map(function(p) { return p.id; });
+
+      let fallbackItems = [];
+      let fallbackCount = 0;
+      if (primary.length < max && s.fallbackSet !== 'none') {
+        const fb = _getFallback(primaryIds, s);
+        fallbackItems = fb.slice(0, max - primary.length);
+        fallbackCount = fallbackItems.length;
+      }
+
+      return {
+        items: primary.concat(fallbackItems),
+        matchedCount: primary.length,
+        fallbackCount: fallbackCount,
+        max: max,
+      };
+    }
+
+    function _getMatchTags(p, s, isFallback) {
+      const tags = [];
+      if (isFallback) { return [{ type: 'fallback', label: 'fallback' }]; }
+      if (p.category === pdp.category) tags.push({ type: 'category', label: 'same category' });
+      if (p.brand === personaBrand)    tags.push({ type: 'brand',    label: 'your brand' });
+      const sz = _getSizes(p);
+      if (sz.indexOf(personaSize) !== -1) tags.push({ type: 'size', label: 'your size' });
+      if (p.in_stock && p.stock > 5)  tags.push({ type: 'stock',    label: 'in stock' });
+      if (p.in_stock && p.stock <= 5) tags.push({ type: 'lowstock', label: p.stock + ' left' });
+      return tags;
+    }
+
+    // ── Rendering helpers ────────────────────────────────────
+    function _priceHtml(p, cls) {
+      const c = cls || 'uc08-rec-card-price';
+      if (p.sale_price) {
+        return '<span class="' + c + '">' +
+               '<span class="' + c + '-old">€' + p.price.toFixed(2) + '</span>' +
+               '<span class="' + c + '-sale">€' + p.sale_price.toFixed(2) + '</span>' +
+               '</span>';
+      }
+      return '<span class="' + c + '">€' + p.price.toFixed(2) + '</span>';
+    }
+
+    function _cardHtml(p, tags, isEmpty) {
+      if (isEmpty) {
+        return '<div class="uc08-rec-card-empty">—</div>';
+      }
+      const tagsHtml = tags.map(function(t) {
+        return '<span class="uc08-tag uc08-tag--' + t.type + '">' + t.label + '</span>';
+      }).join('');
+      return '<div class="uc08-rec-card">' +
+        '<div class="uc08-rec-card-img" style="background:' + p.img_color + '"></div>' +
+        '<div class="uc08-rec-card-body">' +
+          '<div class="uc08-rec-card-brand">' + p.brand + '</div>' +
+          '<div class="uc08-rec-card-name">' + p.name + '</div>' +
+          _priceHtml(p, 'uc08-rec-card-price') +
+          '<div class="uc08-rec-card-tags">' + tagsHtml + '</div>' +
+        '</div>' +
+      '</div>';
+    }
+
+    // ── Activate grid tile ────────────────────────────────────
+    function _activeTileHtml(p) {
+      return '<div class="uc08-act-product-tile">' +
+        '<div class="uc08-act-product-tile-img" style="background:' + p.img_color + '">' +
+          '<div class="uc08-act-product-tile-stock-dot' + (p.stock <= 5 ? ' low' : '') + '"></div>' +
+        '</div>' +
+        '<div class="uc08-act-product-tile-info">' +
+          '<div class="uc08-act-product-tile-name">' + p.name + '</div>' +
+          '<div class="uc08-act-product-tile-price">€' + (p.sale_price || p.price).toFixed(2) + '</div>' +
+        '</div>' +
+      '</div>';
+    }
+
+    // ── Resolution line ──────────────────────────────────────
+    function _resolutionHtml(s, resolved) {
+      const methodLabel  = s.selectionMethod === 'like' ? 'Items you may like' : 'Recommended for you';
+      const rankLabel    = s.useProductRelations ? 'product relations' : 'profile behaviour';
+      let filterDesc = '';
+      if (s.filterSource === 'event')   filterDesc = 'filters from <span class="uc08-res-filter">event (category)</span>';
+      else if (s.filterSource === 'profile') filterDesc = 'filters from <span class="uc08-res-filter">profile (brand, size)</span>';
+      else filterDesc = 'filters from <span class="uc08-res-filter">event (category) + profile (brand, size)</span>';
+
+      let tail = '';
+      if (resolved.fallbackCount > 0) {
+        const fbLabel = s.fallbackSet === 'most-sold' ? 'Most sold' : 'Newest arrivals';
+        tail = ' → <span class="uc08-res-fallback">' + fbLabel + ' filled ' + resolved.fallbackCount + '</span>';
+      }
+      const emptySlots = resolved.max - resolved.items.length;
+      if (emptySlots > 0 && s.fallbackSet === 'none') {
+        tail = ' → <span class="uc08-res-empty">' + emptySlots + ' slot' + (emptySlots > 1 ? 's' : '') + ' empty (no fallback)</span>';
+      }
+
+      return '<span class="uc08-res-event">ViewContent · ' + pdp.id + '</span>' +
+        ' → <span class="uc08-res-method">' + methodLabel + '</span>' +
+        ' · ' + filterDesc +
+        ' · ranked by ' + rankLabel +
+        ' · max <span class="uc08-res-count">' + resolved.max + '</span>' +
+        ' → <span class="uc08-res-count">' + resolved.matchedCount + '</span> matched' +
+        tail +
+        '<span class="uc08-res-honest">Demo simplification: one profile and ' + P.length + ' products; real Activate ranks across full populations with time-weighted decay.</span>';
+    }
+
+    // ── Main render (update dynamic parts only) ──────────────
+    function _render() {
+      const resolved = _resolveGrid(state);
+      const grid = el.querySelector('#uc08-rec-grid');
+      const actGrid = el.querySelector('#uc08-act-prod-grid');
+      const resLine = el.querySelector('#uc08-resolution');
+      const actMeta = el.querySelector('#uc08-act-set-meta');
+      const actEmpty = el.querySelector('#uc08-act-empty-slots');
+
+      // Recs grid
+      if (grid) {
+        grid.classList.add('uc08-rec-grid-animating');
+        const cards = [];
+        for (let i = 0; i < state.maxProducts; i++) {
+          const item = resolved.items[i];
+          if (!item) {
+            cards.push('<div class="uc08-rec-card-empty">—</div>');
+          } else {
+            const isFb = i >= resolved.matchedCount;
+            const tags = _getMatchTags(item, state, isFb);
+            cards.push(_cardHtml(item, tags, false));
+          }
+        }
+        grid.innerHTML = cards.join('');
+        setTimeout(function() { grid.classList.remove('uc08-rec-grid-animating'); }, 250);
+      }
+
+      // Activate product-sets tab grid (must match right panel exactly)
+      if (actGrid) {
+        const tiles = resolved.items.map(function(p) { return _activeTileHtml(p); });
+        actGrid.innerHTML = tiles.join('') || '<div class="uc08-act-empty-slots">No products resolved.</div>';
+      }
+      if (actEmpty) {
+        const emptySlots = resolved.max - resolved.items.length;
+        actEmpty.textContent = emptySlots > 0 ? emptySlots + ' slot' + (emptySlots > 1 ? 's' : '') + ' empty' : '';
+      }
+
+      // Set method meta chip
+      if (actMeta) {
+        const methodLabel = state.selectionMethod === 'like' ? 'Items you may like' : 'Recommended for you';
+        actMeta.innerHTML =
+          '<span class="uc08-act-set-chip">nl-NL</span>' +
+          '<span class="uc08-act-set-chip">Method: ' + methodLabel + '</span>' +
+          '<span class="uc08-act-set-chip">Filters: ' + state.filterSource + '</span>' +
+          '<span class="uc08-act-set-chip">Max: ' + state.maxProducts + '</span>';
+      }
+
+      // Profile tab: highlight rows used as filters
+      const useProfile = state.filterSource === 'profile' || state.filterSource === 'both';
+      const useEvent   = state.filterSource === 'event'   || state.filterSource === 'both';
+      el.querySelectorAll('[data-field]').forEach(function(row) {
+        const field = row.dataset.field;
+        let isActive = false;
+        if ((field === 'favorite_brand_1' || field === 'favorite_size_1') && useProfile) isActive = true;
+        row.classList.toggle('highlighted', isActive);
+        const badge = row.querySelector('.uc08-act-filter-badge');
+        if (badge) badge.style.display = isActive ? '' : 'none';
+      });
+
+      // Resolution line
+      if (resLine) resLine.innerHTML = _resolutionHtml(state, resolved);
+
+      // Controls description update (selection method)
+      const methodDesc = el.querySelector('#uc08-method-desc');
+      if (methodDesc) {
+        methodDesc.textContent = state.selectionMethod === 'like'
+          ? 'Ranks by what others viewed or carted after interacting with the same product (ViewContent, AddToCart).'
+          : 'Ranks by products bought together in the same order — cross-sell (Purchase events).';
+      }
+      const relDesc = el.querySelector('#uc08-rel-desc');
+      if (relDesc) {
+        relDesc.textContent = state.useProductRelations
+          ? 'On — ranking driven by this product\'s own relationships.'
+          : 'Off — ranking driven by the visitor\'s overall profile behaviour.';
+      }
+    }
+
+    // ── Nav SVG icons (inline, minimal) ─────────────────────
+    function _icon(type) {
+      const icons = {
+        dashboard: '<polyline points="3 9 12 2 21 9"/><polyline points="9 22 9 12 15 12 15 22"/>',
+        ai: '<circle cx="12" cy="12" r="3"/><path d="M12 2v2M12 20v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M2 12h2M20 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>',
+        pers: '<path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/><path d="M16 3.13a4 4 0 010 7.75"/>',
+        journeys: '<polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 01-4 4H3"/>',
+        lifecycles: '<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>',
+        audiences: '<path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/>',
+        products: '<path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/>',
+        profiles: '<path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+        data: '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>',
+        apps: '<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>',
+      };
+      return '<svg class="uc08-act-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + (icons[type] || '') + '</svg>';
+    }
+
+    // ── Activate sidebar nav ─────────────────────────────────
+    function _navItem(label, iconKey, isActive) {
+      return '<div class="uc08-act-nav-item' + (isActive ? ' active' : '') + '">' +
+        _icon(iconKey) +
+        '<span>' + label + '</span>' +
+      '</div>';
+    }
+
+    // ── Full page HTML ───────────────────────────────────────
+    const ucData = (window.USE_CASES && window.USE_CASES.use_cases &&
+                    window.USE_CASES.use_cases.find(function(u) { return u.id === 'rec-matching'; })) || {};
+    const benchmarkStr = ucBenchmark('rec-matching', 'commerce');
+    const exampleStr   = ucExample('rec-matching', 'commerce');
+
+    el.innerHTML =
+      '<div class="uc08-demo">' +
+
+        // ── Header ──
+        '<div class="uc08-header">' +
+          '<a href="#" class="uc08-back">← Use Case Menu</a>' +
+          '<div class="uc08-header-uc">' +
+            '<span class="uc08-header-num">08</span>' +
+            '<span class="uc08-header-name">' + (ucData.name || 'Recommend similar products') + '</span>' +
+            '<span class="uc08-header-hook">' + (ucData.hook || 'When the first choice misses, show the next.') + '</span>' +
+          '</div>' +
+          (benchmarkStr ? '<div class="uc08-header-metric">' + benchmarkStr + '</div>' : '') +
+        '</div>' +
+
+        // ── Main panels ──
+        '<div class="uc08-panels">' +
+
+          // Left: Activate
+          '<div class="uc08-panel-left">' +
+            '<div class="uc08-activate">' +
+
+              // Sidebar
+              '<div class="uc08-act-sidebar">' +
+                '<div class="uc08-act-logo">' +
+                  '<span class="uc08-act-logo-spotler">spotler</span>' +
+                  '<span class="uc08-act-logo-act">activate</span>' +
+                '</div>' +
+                '<nav class="uc08-act-nav">' +
+                  _navItem('Dashboard', 'dashboard', false) +
+                  _navItem('Predictive AI', 'ai', false) +
+                  _navItem('Personalizations', 'pers', false) +
+                  _navItem('Journeys', 'journeys', false) +
+                  _navItem('Lifecycles', 'lifecycles', false) +
+                  '<div class="uc08-act-nav-divider"></div>' +
+                  _navItem('Audiences', 'audiences', false) +
+                  _navItem('Products', 'products', false) +
+                  _navItem('360° profiles', 'profiles', true) +
+                  _navItem('Data', 'data', false) +
+                  _navItem('Apps', 'apps', false) +
+                '</nav>' +
+                '<div class="uc08-act-bottom">' +
+                  '<div class="uc08-act-merchant-name">Shopler</div>' +
+                  '<div><button class="uc08-act-switch">⇄ Switch merchant</button></div>' +
+                  '<div class="uc08-act-user">Erik de Kock</div>' +
+                '</div>' +
+              '</div>' +
+
+              // Main area
+              '<div class="uc08-act-main">' +
+                '<div class="uc08-act-page-header">' +
+                  '<div class="uc08-act-page-icon">' +
+                    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#1a2b3c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>' +
+                  '</div>' +
+                  '<div class="uc08-act-page-title">360° profiles</div>' +
+                '</div>' +
+
+                // Profile card
+                '<div class="uc08-act-profile-card">' +
+                  '<div class="uc08-act-profile-header">' +
+                    '<div class="uc08-act-avatar">RJ</div>' +
+                    '<div>' +
+                      '<div class="uc08-act-profile-name">' + personaName + '</div>' +
+                      '<div class="uc08-act-chips">' +
+                        '<span class="uc08-act-chip">' + personaEmail + '</span>' +
+                        '<span class="uc08-act-chip">ID: ' + personaId + '</span>' +
+                        '<span class="uc08-act-chip">Active 3 days ago</span>' +
+                      '</div>' +
+                    '</div>' +
+                  '</div>' +
+                '</div>' +
+
+                // Tabs
+                '<div class="uc08-act-tabs">' +
+                  '<button class="uc08-act-tab" data-tab="profile">Profile</button>' +
+                  '<button class="uc08-act-tab" data-tab="predictive">Predictive AI</button>' +
+                  '<button class="uc08-act-tab active" data-tab="product-sets">Product sets</button>' +
+                  '<button class="uc08-act-tab" data-tab="activity">Activity</button>' +
+                  '<button class="uc08-act-tab" data-tab="journeys">Journeys</button>' +
+                  '<button class="uc08-act-tab" data-tab="audiences">Audiences</button>' +
+                '</div>' +
+
+                // Tab panels
+                '<div class="uc08-act-tab-panels">' +
+
+                  // Profile tab
+                  '<div class="uc08-act-tab-panel" data-panel="profile">' +
+                    '<div style="margin-bottom:10px;font-size:11px;font-weight:700;color:#6b7a89;text-transform:uppercase;letter-spacing:.08em">System fields</div>' +
+                    '<table class="uc08-act-fields-table">' +
+                      '<thead><tr><th>Name</th><th>Value</th><th>Last update</th></tr></thead>' +
+                      '<tbody>' +
+                        '<tr class="uc08-act-fields-row" data-field="favorite_brand_1">' +
+                          '<td class="uc08-act-field-key">favorite_brand_1<span class="uc08-act-filter-badge" style="display:none">filter</span></td>' +
+                          '<td class="uc08-act-field-val">' + personaBrand + '</td>' +
+                          '<td class="uc08-act-field-time">2 days ago</td>' +
+                        '</tr>' +
+                        '<tr class="uc08-act-fields-row" data-field="favorite_category_1">' +
+                          '<td class="uc08-act-field-key">favorite_category_1<span class="uc08-act-filter-badge" style="display:none">filter</span></td>' +
+                          '<td class="uc08-act-field-val">' + personaCat + '</td>' +
+                          '<td class="uc08-act-field-time">2 days ago</td>' +
+                        '</tr>' +
+                        '<tr class="uc08-act-fields-row" data-field="favorite_color_1">' +
+                          '<td class="uc08-act-field-key">favorite_color_1</td>' +
+                          '<td class="uc08-act-field-val">' + personaColour + '</td>' +
+                          '<td class="uc08-act-field-time">5 days ago</td>' +
+                        '</tr>' +
+                        '<tr class="uc08-act-fields-row" data-field="favorite_size_1">' +
+                          '<td class="uc08-act-field-key">favorite_size_1<span class="uc08-act-filter-badge" style="display:none">filter</span></td>' +
+                          '<td class="uc08-act-field-val">' + personaSize + '</td>' +
+                          '<td class="uc08-act-field-time">2 days ago</td>' +
+                        '</tr>' +
+                      '</tbody>' +
+                    '</table>' +
+                    (exampleStr ? '<div style="margin-top:14px;padding:10px 12px;background:#f7f9fb;border-radius:6px;font-size:11px;color:#4a5568;font-style:italic">' + exampleStr + '</div>' : '') +
+                  '</div>' +
+
+                  // Predictive AI tab (inert)
+                  '<div class="uc08-act-tab-panel" data-panel="predictive">' +
+                    '<div style="font-size:12px;color:#6b7a89;padding:16px 0">Predictive scores not shown in this demo.</div>' +
+                  '</div>' +
+
+                  // Product sets tab (ACTIVE — synced with right panel)
+                  '<div class="uc08-act-tab-panel active" data-panel="product-sets">' +
+                    '<div id="uc08-act-set-meta" class="uc08-act-set-meta"></div>' +
+                    '<div id="uc08-act-prod-grid" class="uc08-act-product-grid"></div>' +
+                    '<div id="uc08-act-empty-slots" class="uc08-act-empty-slots"></div>' +
+                  '</div>' +
+
+                  // Activity tab
+                  '<div class="uc08-act-tab-panel" data-panel="activity">' +
+                    '<div class="uc08-act-activity-row">' +
+                      '<div class="uc08-act-activity-dot"></div>' +
+                      '<div>' +
+                        '<div class="uc08-act-activity-event">ViewContent</div>' +
+                        '<div class="uc08-act-activity-meta">' +
+                          '<span class="uc08-act-activity-sku">' + pdp.id + '</span>' +
+                          ' &nbsp;' + pdp.name + ' · €' + pdp.price.toFixed(2) + ' · Just now' +
+                        '</div>' +
+                      '</div>' +
+                    '</div>' +
+                    '<div class="uc08-act-activity-row">' +
+                      '<div class="uc08-act-activity-dot" style="background:#dde4ea"></div>' +
+                      '<div>' +
+                        '<div class="uc08-act-activity-event" style="color:#8fa0b0">ViewContent</div>' +
+                        '<div class="uc08-act-activity-meta">NR-W-001 &nbsp;Noreen Classic Wool Coat · 2 days ago</div>' +
+                      '</div>' +
+                    '</div>' +
+                    '<div class="uc08-act-activity-row">' +
+                      '<div class="uc08-act-activity-dot" style="background:#dde4ea"></div>' +
+                      '<div>' +
+                        '<div class="uc08-act-activity-event" style="color:#8fa0b0">ViewContent</div>' +
+                        '<div class="uc08-act-activity-meta">NR-K-001 &nbsp;Noreen Merino Rollneck · 3 days ago</div>' +
+                      '</div>' +
+                    '</div>' +
+                  '</div>' +
+
+                  // Journeys / Audiences (inert)
+                  '<div class="uc08-act-tab-panel" data-panel="journeys"><div style="font-size:12px;color:#6b7a89;padding:16px 0">Not shown in this demo.</div></div>' +
+                  '<div class="uc08-act-tab-panel" data-panel="audiences"><div style="font-size:12px;color:#6b7a89;padding:16px 0">Not shown in this demo.</div></div>' +
+
+                '</div>' + // tab-panels
+              '</div>' + // act-main
+            '</div>' + // activate
+          '</div>' + // panel-left
+
+          // Right: Shopler PDP
+          '<div class="uc08-panel-right">' +
+            '<div class="uc08-shopler">' +
+
+              // Browser chrome
+              '<div class="uc08-shop-browser">' +
+                '<div class="uc08-shop-browser-dot" style="background:#ff5f57"></div>' +
+                '<div class="uc08-shop-browser-dot" style="background:#febc2e"></div>' +
+                '<div class="uc08-shop-browser-dot" style="background:#28c840"></div>' +
+                '<div class="uc08-shop-browser-bar">shopler.com/coats/' + pdp.id.toLowerCase() + '</div>' +
+              '</div>' +
+
+              // Shopler nav
+              '<div class="uc08-shop-nav">' +
+                '<div class="uc08-shop-logo">Shop<span>ler</span></div>' +
+                '<div class="uc08-shop-nav-links">' +
+                  '<a class="uc08-shop-nav-link" href="#">Women</a>' +
+                  '<a class="uc08-shop-nav-link active" href="#">Coats</a>' +
+                  '<a class="uc08-shop-nav-link" href="#">Knitwear</a>' +
+                  '<a class="uc08-shop-nav-link" href="#">Dresses</a>' +
+                '</div>' +
+              '</div>' +
+
+              // Breadcrumb
+              '<div class="uc08-shop-breadcrumb">' +
+                '<a href="#">Women</a><span>›</span><a href="#">Coats</a><span>›</span><span>' + pdp.name + '</span>' +
+              '</div>' +
+
+              // PDP
+              '<div class="uc08-pdp">' +
+                '<div class="uc08-pdp-img" style="background:' + pdp.img_color + '">' +
+                  '<div class="uc08-pdp-stock-badge">Only ' + pdp.stock + ' left</div>' +
+                '</div>' +
+                '<div class="uc08-pdp-info">' +
+                  '<div class="uc08-pdp-brand">' + pdp.brand + '</div>' +
+                  '<div class="uc08-pdp-name">' + pdp.name + '</div>' +
+                  '<div>€<span class="uc08-pdp-price">' + pdp.price.toFixed(2) + '</span></div>' +
+                  '<div class="uc08-pdp-attr"><strong>Colour</strong> ' + pdp.colour + '</div>' +
+                  '<div class="uc08-pdp-attr"><strong>Material</strong> ' + pdp.material + '</div>' +
+                  '<div class="uc08-pdp-attr"><strong>Size</strong>' +
+                    '<div class="uc08-pdp-sizes">' +
+                      (pdp.sizes || []).map(function(s) {
+                        return '<div class="uc08-pdp-size-btn' + (s === 'M' ? ' selected' : '') + '">' + s + '</div>';
+                      }).join('') +
+                    '</div>' +
+                  '</div>' +
+                  '<div class="uc08-pdp-stock">Only ' + pdp.stock + ' left</div>' +
+                  '<button class="uc08-pdp-cta">Add to bag</button>' +
+                '</div>' +
+              '</div>' +
+
+              // Recommendations grid
+              '<div class="uc08-recs">' +
+                '<div class="uc08-recs-heading">' +
+                  'You might also like' +
+                  '<span class="uc08-recs-heading-sub">Powered by Activate</span>' +
+                '</div>' +
+                '<div id="uc08-rec-grid" class="uc08-rec-grid"></div>' +
+              '</div>' +
+
+            '</div>' + // shopler
+          '</div>' + // panel-right
+
+        '</div>' + // panels
+
+        // ── Controls strip ──
+        '<div class="uc08-controls">' +
+          '<div class="uc08-controls-label">Configured under Products → Product sets in Spotler Activate</div>' +
+          '<div class="uc08-controls-row">' +
+
+            // Filter source (primary)
+            '<div class="uc08-ctrl-group">' +
+              '<div class="uc08-ctrl-group-label">Filter source</div>' +
+              '<div class="uc08-filter-toggle">' +
+                '<button class="uc08-filter-btn active" data-filter="event">From event</button>' +
+                '<button class="uc08-filter-btn" data-filter="profile">From profile</button>' +
+                '<button class="uc08-filter-btn" data-filter="both">Both</button>' +
+              '</div>' +
+            '</div>' +
+
+            // Selection method
+            '<div class="uc08-ctrl-group">' +
+              '<div class="uc08-ctrl-group-label">Selection method</div>' +
+              '<div class="uc08-method-toggle">' +
+                '<button class="uc08-method-btn active" data-method="like">Items you may like</button>' +
+                '<button class="uc08-method-btn" data-method="crosssell">Recommended for you</button>' +
+              '</div>' +
+              '<div id="uc08-method-desc" class="uc08-ctrl-desc"></div>' +
+            '</div>' +
+
+            // Recommend based on products
+            '<div class="uc08-ctrl-group">' +
+              '<div class="uc08-ctrl-group-label">Recommend based on products</div>' +
+              '<div class="uc08-toggle-row">' +
+                '<label class="uc08-toggle">' +
+                  '<input type="checkbox" id="uc08-rel-toggle" checked>' +
+                  '<span class="uc08-toggle-slider"></span>' +
+                '</label>' +
+                '<span class="uc08-toggle-label" id="uc08-rel-label">On</span>' +
+              '</div>' +
+              '<div id="uc08-rel-desc" class="uc08-ctrl-desc"></div>' +
+            '</div>' +
+
+            // Max products
+            '<div class="uc08-ctrl-group">' +
+              '<div class="uc08-ctrl-group-label">Max products</div>' +
+              '<input type="number" id="uc08-max-input" class="uc08-max-input" min="2" max="8" value="4">' +
+            '</div>' +
+
+            // Fallback set
+            '<div class="uc08-ctrl-group">' +
+              '<div class="uc08-ctrl-group-label">Fallback set</div>' +
+              '<select id="uc08-fallback-select" class="uc08-fallback-select">' +
+                '<option value="most-sold">Most sold</option>' +
+                '<option value="newest">Newest arrivals</option>' +
+                '<option value="none">None</option>' +
+              '</select>' +
+            '</div>' +
+
+          '</div>' + // controls-row
+        '</div>' + // controls
+
+        // ── Resolution line ──
+        '<div id="uc08-resolution" class="uc08-resolution"></div>' +
+
+      '</div>'; // uc08-demo
+
+    // ── Wire controls ────────────────────────────────────────
+    // Filter source buttons
+    el.querySelectorAll('[data-filter]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        state.filterSource = btn.dataset.filter;
+        el.querySelectorAll('[data-filter]').forEach(function(b) {
+          b.classList.toggle('active', b === btn);
+        });
+        _render();
+      });
+    });
+
+    // Selection method buttons
+    el.querySelectorAll('[data-method]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        state.selectionMethod = btn.dataset.method;
+        el.querySelectorAll('[data-method]').forEach(function(b) {
+          b.classList.toggle('active', b === btn);
+        });
+        _render();
+      });
+    });
+
+    // Recommend based on products toggle
+    var relToggle = el.querySelector('#uc08-rel-toggle');
+    var relLabel  = el.querySelector('#uc08-rel-label');
+    if (relToggle) {
+      relToggle.addEventListener('change', function() {
+        state.useProductRelations = relToggle.checked;
+        if (relLabel) relLabel.textContent = relToggle.checked ? 'On' : 'Off';
+        _render();
+      });
+    }
+
+    // Max products
+    var maxInput = el.querySelector('#uc08-max-input');
+    if (maxInput) {
+      maxInput.addEventListener('input', function() {
+        var v = parseInt(maxInput.value, 10);
+        if (!isNaN(v) && v >= 2 && v <= 8) {
+          state.maxProducts = v;
+          _render();
+        }
+      });
+    }
+
+    // Fallback select
+    var fbSelect = el.querySelector('#uc08-fallback-select');
+    if (fbSelect) {
+      fbSelect.addEventListener('change', function() {
+        state.fallbackSet = fbSelect.value;
+        _render();
+      });
+    }
+
+    // Activate tab switching (Profile · Predictive AI · Activity · Product sets · Journeys · Audiences)
+    el.querySelectorAll('.uc08-act-tab').forEach(function(tab) {
+      tab.addEventListener('click', function() {
+        el.querySelectorAll('.uc08-act-tab').forEach(function(t) { t.classList.remove('active'); });
+        el.querySelectorAll('.uc08-act-tab-panel').forEach(function(p) { p.classList.remove('active'); });
+        tab.classList.add('active');
+        var panel = el.querySelector('[data-panel="' + tab.dataset.tab + '"]');
+        if (panel) panel.classList.add('active');
+      });
+    });
+
+    // Initial render
+    _render();
+  }, // end 'rec-matching'
+}; // end STAGE
+
+// ─── Routing ────────────────────────────────────────────────
+let _appRoot = null;
+
+function _mountMainApp() {
+  const ni = document.querySelector('meta[name="robots"]');
+  if (ni) ni.remove();
+  if (!_appRoot) {
+    _appRoot = ReactDOM.createRoot(document.getElementById('root'));
+  }
+  _appRoot.render(React.createElement(App));
+}
+
+function _renderDemo(ucId) {
+  const el = document.getElementById('root');
+  el.innerHTML = '';
+  el.className = '';
+  // Noindex
+  let ni = document.querySelector('meta[name="robots"]');
+  if (!ni) { ni = document.createElement('meta'); ni.name = 'robots'; document.head.appendChild(ni); }
+  ni.setAttribute('content', 'noindex');
+  const fn = STAGE[ucId];
+  if (fn) {
+    fn(el);
+  } else {
+    el.innerHTML = '<div style="padding:40px;font-family:system-ui;color:#6b7a89">' +
+      '<h2 style="color:#002a4d">UC ' + ucId + '</h2>' +
+      '<p>Demo coming soon — this is a placeholder for another session.</p>' +
+      '<a href="#" style="color:#23afe6;font-weight:700">← Back to Use Case Menu</a>' +
+      '</div>';
+  }
+}
+
+function _route() {
+  const h = window.location.hash;
+  if (h.startsWith('#/usecase/')) {
+    const ucId = h.slice('#/usecase/'.length).split('/')[0].split('?')[0];
+    if (_appRoot) { _appRoot.unmount(); _appRoot = null; }
+    _renderDemo(ucId);
+  } else {
+    document.getElementById('root').innerHTML = '';
+    _mountMainApp();
+  }
+}
+
+window.addEventListener('hashchange', _route);
+_route();
