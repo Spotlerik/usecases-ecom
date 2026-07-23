@@ -23,6 +23,7 @@ class App extends React.Component {
     pitch: [],         // starred use case ids
     pitchCopied: false,
     expandedCards: [], // use case ids expanded to the tier-2 "quick why" state
+    ucRoute: null,     // set when hash is /usecase/:id
   };
 
   componentDidMount() {
@@ -35,9 +36,28 @@ class App extends React.Component {
     window.removeEventListener('keydown', this._onKey);
   }
 
+  _setNoindex(active) {
+    let el = document.head.querySelector('[data-demo-noindex]');
+    if (active && !el) {
+      el = document.createElement('meta');
+      el.name = 'robots'; el.content = 'noindex';
+      el.setAttribute('data-demo-noindex', '');
+      document.head.appendChild(el);
+    } else if (!active && el) {
+      el.parentNode.removeChild(el);
+    }
+  }
+
   // -------- URL hash sync --------
   readHash() {
     const h = window.location.hash.replace(/^#/, '');
+    if (h.startsWith('/usecase/')) {
+      this._setNoindex(true);
+      this.setState({ ucRoute: h.slice('/usecase/'.length) });
+      return;
+    }
+    this._setNoindex(false);
+    if (this.state.ucRoute) this.setState({ ucRoute: null });
     if (!h) return;
     const q = Object.fromEntries(h.split('&').map(p => p.split('=').map(decodeURIComponent)));
     const s = {};
@@ -207,6 +227,15 @@ class App extends React.Component {
 
   render() {
     const R = React.createElement;
+    // Demo route: #/usecase/:id
+    if (this.state.ucRoute) {
+      const Comp = window.UC_STAGE && window.UC_STAGE[this.state.ucRoute];
+      if (Comp) return R(Comp, null);
+      return R('div', { style: { padding: 40, textAlign: 'center', fontFamily: "'Open Sans', sans-serif", color: '#6b7a89' } },
+        R('div', { style: { fontSize: 18, fontWeight: 700, color: '#002a4d', marginBottom: 12 } }, 'Demo coming soon'),
+        R('a', { href: '#', style: { color: '#23afe6', fontWeight: 700, textDecoration: 'none', fontSize: 14 } }, '← Back to the menu')
+      );
+    }
     const rawData = this.state.data;
     if (!rawData) {
       return R('div', { style: { minHeight: '100vh', background: '#eef2f6', padding: 40, color: '#6b7a89' } }, this.t('Loading…'));
@@ -1080,3 +1109,649 @@ class App extends React.Component {
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(React.createElement(App));
+
+// ============================================================
+// Routes  #/usecase/:id — demo pages
+// Registry: window.UC_STAGE[ucId] = React component function
+// ============================================================
+window.UC_STAGE = window.UC_STAGE || {};
+
+// ── Products catalogue ────────────────────────────────────────
+// No SKUs hard-coded in the journey; the flow definition references
+// DEMO_PRODUCTS by category. Swap this array to try a different catalogue.
+var DEMO_PRODUCTS = [
+  { id: 'merino',   name: 'Merino Wool Sweater', cat: 'knitwear',     price: 79,  color: '#dce8f0', care: 'Hand wash cold, dry flat.' },
+  { id: 'chino',    name: 'Slim Chino Trousers', cat: 'bottoms',      price: 59,  color: '#f0dce8', care: 'Machine wash 30°C, iron warm.' },
+  { id: 'shirt',    name: 'Classic White Shirt',  cat: 'tops',         price: 45,  color: '#dcf0e4', care: 'Machine wash 40°C, tumble dry low.' },
+  { id: 'shoes',    name: 'Running Shoes',         cat: 'footwear',    price: 89,  color: '#f0ece0', care: 'Wipe clean with a damp cloth.' },
+  { id: 'backpack', name: 'Canvas Backpack',       cat: 'accessories', price: 49,  color: '#e8dcf0', care: 'Spot clean only, air dry.' },
+  { id: 'jacket',   name: 'Puffer Jacket',          cat: 'outerwear',   price: 119, color: '#dcf0f0', care: 'Machine wash 30°C, tumble dry low heat.' },
+];
+
+var DEMO_CAT_RECS = {
+  knitwear:     ['chino', 'shirt'],
+  bottoms:      ['shirt', 'shoes'],
+  tops:         ['chino', 'backpack'],
+  footwear:     ['merino', 'backpack'],
+  accessories:  ['merino', 'shirt'],
+  outerwear:    ['merino', 'chino'],
+};
+
+// Persona
+var ROBIN = { name: 'Robin Jansen', email: 'robin.jansen@example.com' };
+var ROBIN_PURCHASE = DEMO_PRODUCTS[0]; // Merino Wool Sweater — resolved at load
+var ROBIN_RECS = (DEMO_CAT_RECS[ROBIN_PURCHASE.cat] || [])
+  .map(function(id) { return DEMO_PRODUCTS.find(function(p) { return p.id === id; }); })
+  .filter(Boolean);
+
+// ── Shared helpers ────────────────────────────────────────────
+function ucBenchmarkStr(ucId) {
+  var ucs = window.USE_CASES && window.USE_CASES.use_cases;
+  var uc = ucs && ucs.find(function(u) { return u.id === ucId; });
+  return uc ? (uc.metrics.commerce.value + ' ' + uc.metrics.commerce.label) : '';
+}
+function ucNameStr(ucId) {
+  var ucs = window.USE_CASES && window.USE_CASES.use_cases;
+  var uc = ucs && ucs.find(function(u) { return u.id === ucId; });
+  return uc ? uc.name : ucId;
+}
+
+// ── Reusable journey canvas renderer ─────────────────────────
+// Usage: React.createElement(UcJourneyCanvas, { flow, ds })
+//   flow: { nodes: [{id,type,x,y,label,sub}...], edges: [{id,from,to,path,label,lx,ly}...] }
+//   ds:   { tokenNode, visitedNodes[], visitedEdges[], dimNodes[], dimEdges[] }
+//
+// To use this canvas for a different journey (e.g. abandoned-cart), supply a
+// different flow object with the same shape. The renderer is fully generic.
+//
+// Node types:
+//   entry, exit, goal           → green circle
+//   email, coupon, action,      → blue rounded square
+//   audience, update-profile
+//   wait, split, prodsplit      → orange diamond
+
+function UcJourneyCanvas(props) {
+  var CE = React.createElement;
+  var flow = props.flow;
+  var ds = props.ds || {};
+  var NH = 23;
+  var GREEN  = '#2f9e5f';
+  var BLUE   = '#1f5fc4';
+  var ORANGE = '#f08a24';
+
+  function isVisitedNode(id)  { return ds.visitedNodes && ds.visitedNodes.indexOf(id) >= 0; }
+  function isDimmedNode(id)   { return ds.dimNodes     && ds.dimNodes.indexOf(id) >= 0; }
+  function isVisitedEdge(id)  { return ds.visitedEdges && ds.visitedEdges.indexOf(id) >= 0; }
+  function isDimmedEdge(id)   { return ds.dimEdges     && ds.dimEdges.indexOf(id) >= 0; }
+
+  function renderNode(n) {
+    var token   = ds.tokenNode === n.id;
+    var dimmed  = isDimmedNode(n.id);
+    var x = n.x, y = n.y;
+    var els = [];
+
+    if (n.type === 'entry' || n.type === 'exit' || n.type === 'goal') {
+      els.push(CE('circle', { key: 's', cx: x, cy: y, r: NH, fill: GREEN }));
+      var icon = n.type === 'entry' ? '▶' : n.type === 'goal' ? '⚑' : '→';
+      els.push(CE('text', { key: 'i', x: x, y: y + 5, textAnchor: 'middle', fill: '#fff', fontSize: 13, fontWeight: 'bold', fontFamily: 'system-ui' }, icon));
+    } else if (n.type === 'wait' || n.type === 'split' || n.type === 'prodsplit') {
+      var pts = x + ',' + (y - NH) + ' ' + (x + NH) + ',' + y + ' ' + x + ',' + (y + NH) + ' ' + (x - NH) + ',' + y;
+      els.push(CE('polygon', { key: 's', points: pts, fill: ORANGE }));
+      var icon2 = n.type === 'wait' ? '⧖' : '?';
+      els.push(CE('text', { key: 'i', x: x, y: y + 4, textAnchor: 'middle', fill: '#fff', fontSize: n.type === 'wait' ? 13 : 14, fontFamily: 'system-ui' }, icon2));
+    } else {
+      // email, coupon, action, audience
+      els.push(CE('rect', { key: 's', x: x - NH, y: y - NH, width: NH * 2, height: NH * 2, rx: 8, fill: BLUE }));
+      var icon3 = n.type === 'email' ? '✉' : n.type === 'coupon' ? '%' : n.type === 'audience' ? '●' : '⇧';
+      els.push(CE('text', { key: 'i', x: x, y: y + 5, textAnchor: 'middle', fill: '#fff', fontSize: 14, fontFamily: 'system-ui' }, icon3));
+    }
+
+    // Node name label
+    els.push(CE('text', { key: 'lbl', x: x, y: y + NH + 13, textAnchor: 'middle', fill: '#1a2b3c', fontSize: 10, fontWeight: '600', fontFamily: "'Open Sans', system-ui" }, n.label));
+    if (n.sub) {
+      els.push(CE('text', { key: 'sub', x: x, y: y + NH + 24, textAnchor: 'middle', fill: '#6b7a89', fontSize: 9, fontFamily: "'Open Sans', system-ui" }, n.sub));
+    }
+
+    // Live token ring
+    if (token) {
+      els.push(CE('circle', { key: 'tok', cx: x, cy: y, r: NH + 6, fill: 'none', stroke: '#23afe6', strokeWidth: 3 }));
+    }
+
+    return CE('g', { key: n.id, opacity: dimmed ? 0.22 : 1 }, ...els);
+  }
+
+  function renderEdge(e) {
+    var visited = isVisitedEdge(e.id);
+    var dimmed  = isDimmedEdge(e.id);
+    var stroke  = dimmed ? '#dde4ea' : visited ? '#002a4d' : '#c8d0d8';
+    var sw      = visited ? 2.5 : 1.5;
+    var dash    = dimmed ? '4 3' : 'none';
+    var els = [];
+
+    els.push(CE('path', { key: 'p', d: e.path, stroke: stroke, strokeWidth: sw, strokeDasharray: dash, fill: 'none', opacity: dimmed ? 0.5 : 1 }));
+
+    if (e.label) {
+      var isSR   = e.label === 'Sent' || e.label === 'Remainder';
+      var pillBg = dimmed ? '#f0f4f7' : isSR ? '#e6f6fc' : '#f5f5f5';
+      var pillFg = dimmed ? '#b0bcc6' : isSR ? '#1f5fc4' : '#6b7a89';
+      var tw     = e.label.length * 5.5 + 12;
+      var lx = e.lx, ly = e.ly;
+      els.push(CE('g', { key: 'lbl', opacity: dimmed ? 0.4 : 1 },
+        CE('rect', { x: lx - tw / 2, y: ly - 7, width: tw, height: 14, rx: 7, fill: pillBg }),
+        CE('text', { x: lx, y: ly + 4, textAnchor: 'middle', fill: pillFg, fontSize: 9, fontWeight: '700', fontFamily: "'Open Sans', system-ui" }, e.label)
+      ));
+    }
+
+    return CE('g', { key: e.id }, ...els);
+  }
+
+  return CE('svg', { width: 440, height: 900, style: { display: 'block', minWidth: 440 } },
+    CE('g', { key: 'edges' }, ...flow.edges.map(renderEdge)),
+    CE('g', { key: 'nodes' }, ...flow.nodes.map(renderNode))
+  );
+}
+
+// ── UC17 flow definition ──────────────────────────────────────
+// To reuse UcJourneyCanvas for another journey (abandoned-cart, etc.),
+// define a new { nodes, edges } object and pass it as `flow`.
+// The renderer only reads x, y, type, label, sub on nodes
+// and id, from, to, path, label, lx, ly on edges.
+
+var FOLLOWUP_LOYALTY_FLOW = {
+  nodes: [
+    { id: 'entry',          type: 'entry',     x: 220, y: 40,  label: 'Purchase',          sub: 'Event is one of Purchase' },
+    { id: 'wait-3d',        type: 'wait',      x: 220, y: 120, label: 'Wait 3 days',        sub: 'Covering delivery' },
+    { id: 'email-thankyou', type: 'email',     x: 220, y: 200, label: 'Thank-you email',    sub: 'Care guide for item' },
+    { id: 'exit-1',         type: 'exit',      x: 55,  y: 200, label: 'Exit',               sub: 'No address or consent' },
+    { id: 'split-30d',      type: 'split',     x: 220, y: 290, label: 'Purchased',          sub: 'within 30 days?' },
+    { id: 'goal-1',         type: 'goal',      x: 385, y: 290, label: 'Goal',               sub: 'Repeat purchase' },
+    { id: 'product-split',  type: 'prodsplit', x: 220, y: 375, label: 'Category?',          sub: 'Route by item bought' },
+    { id: 'coupon',         type: 'coupon',    x: 220, y: 450, label: 'Coupon',             sub: 'Loyalty reward' },
+    { id: 'email-offer',    type: 'email',     x: 220, y: 525, label: 'Offer email',        sub: 'Next purchase + coupon' },
+    { id: 'exit-2',         type: 'exit',      x: 55,  y: 525, label: 'Exit',               sub: 'No address or consent' },
+    { id: 'split-14d',      type: 'split',     x: 220, y: 610, label: 'Purchased',          sub: 'within 14 days?' },
+    { id: 'goal-2',         type: 'goal',      x: 385, y: 610, label: 'Goal',               sub: 'Repeat purchase' },
+    { id: 'update-profile', type: 'action',    x: 220, y: 690, label: 'Update profile',     sub: 'Increment loyalty score' },
+    { id: 'audience',       type: 'audience',  x: 220, y: 765, label: 'Audience',           sub: 'Repeat customers' },
+    { id: 'exit-3',         type: 'exit',      x: 220, y: 840, label: 'Exit',               sub: '' },
+  ],
+  edges: [
+    { id: 'e1',  from: 'entry',          to: 'wait-3d',        path: 'M220,63 L220,97' },
+    { id: 'e2',  from: 'wait-3d',        to: 'email-thankyou', path: 'M220,143 L220,177' },
+    { id: 'e3',  from: 'email-thankyou', to: 'split-30d',      path: 'M220,223 L220,267',  label: 'Sent',      lx: 240, ly: 245 },
+    { id: 'e4',  from: 'email-thankyou', to: 'exit-1',         path: 'M197,200 L78,200',   label: 'Remainder', lx: 137, ly: 192 },
+    { id: 'e5',  from: 'split-30d',      to: 'goal-1',         path: 'M243,290 L362,290',  label: 'yes',       lx: 302, ly: 283 },
+    { id: 'e6',  from: 'split-30d',      to: 'product-split',  path: 'M220,313 L220,352',  label: 'no',        lx: 235, ly: 332 },
+    { id: 'e7',  from: 'product-split',  to: 'coupon',         path: 'M220,398 L220,427' },
+    { id: 'e8',  from: 'coupon',         to: 'email-offer',    path: 'M220,473 L220,502' },
+    { id: 'e9',  from: 'email-offer',    to: 'split-14d',      path: 'M220,548 L220,587',  label: 'Sent',      lx: 240, ly: 567 },
+    { id: 'e10', from: 'email-offer',    to: 'exit-2',         path: 'M197,525 L78,525',   label: 'Remainder', lx: 137, ly: 517 },
+    { id: 'e11', from: 'split-14d',      to: 'goal-2',         path: 'M243,610 L362,610',  label: 'yes',       lx: 302, ly: 603 },
+    { id: 'e12', from: 'split-14d',      to: 'update-profile', path: 'M220,633 L220,667',  label: 'no',        lx: 235, ly: 650 },
+    { id: 'e13', from: 'update-profile', to: 'audience',       path: 'M220,713 L220,742' },
+    { id: 'e14', from: 'audience',       to: 'exit-3',         path: 'M220,788 L220,817' },
+  ]
+};
+
+// ── UC17 state machine ────────────────────────────────────────
+// Returns the visual state (which node holds the token, which paths are
+// visited / dimmed) plus an email list and a commentary string.
+// All args are primitives; this is a pure function with no side-effects.
+
+function uc17ComputeState(day, buyDay, noConsent) {
+  var bought30 = buyDay !== null && buyDay > 0 && buyDay <= 34;
+  var bought14 = buyDay !== null && buyDay > 0; // bought at any point
+
+  if (day < 3) {
+    return {
+      tokenNode: 'entry', visitedNodes: ['entry'], visitedEdges: [],
+      dimNodes: [], dimEdges: [],
+      comment: 'Robin just placed her order. Activate records the Purchase event and enters her into the journey.',
+      emails: []
+    };
+  }
+  if (day === 3) {
+    return {
+      tokenNode: 'wait-3d', visitedNodes: ['entry', 'wait-3d'], visitedEdges: ['e1'],
+      dimNodes: [], dimEdges: [],
+      comment: 'Wait node: Activate holds for 3 days — long enough for delivery — before sending anything.',
+      emails: []
+    };
+  }
+
+  // day >= 4
+  if (noConsent) {
+    return {
+      tokenNode: 'exit-1',
+      visitedNodes: ['entry', 'wait-3d', 'email-thankyou', 'exit-1'],
+      visitedEdges: ['e1', 'e2', 'e4'],
+      dimNodes: ['split-30d','goal-1','product-split','coupon','email-offer','exit-2','split-14d','goal-2','update-profile','audience','exit-3'],
+      dimEdges: ['e3','e5','e6','e7','e8','e9','e10','e11','e12','e13','e14'],
+      comment: 'Email node: no address or consent on file. Activate routes Robin through the Remainder branch to an exit. The inbox stays empty.',
+      emails: []
+    };
+  }
+
+  if (day === 4) {
+    return {
+      tokenNode: 'email-thankyou',
+      visitedNodes: ['entry', 'wait-3d', 'email-thankyou'], visitedEdges: ['e1', 'e2'],
+      dimNodes: [], dimEdges: [],
+      comment: 'Email node: Activate sends the thank-you with care guidance for the ' + ROBIN_PURCHASE.name + '. The Sent branch opens.',
+      emails: ['thankyou']
+    };
+  }
+
+  if (day >= 5 && day < 34) {
+    return {
+      tokenNode: 'split-30d',
+      visitedNodes: ['entry','wait-3d','email-thankyou','split-30d'], visitedEdges: ['e1','e2','e3'],
+      dimNodes: [], dimEdges: [],
+      comment: 'Engagement split: Activate watches whether Robin purchases again within 30 days. Journey is live; no messages go out until the split resolves.',
+      emails: ['thankyou']
+    };
+  }
+
+  // day >= 34
+  if (bought30) {
+    return {
+      tokenNode: 'goal-1',
+      visitedNodes: ['entry','wait-3d','email-thankyou','split-30d','goal-1'],
+      visitedEdges: ['e1','e2','e3','e5'],
+      dimNodes: ['product-split','coupon','email-offer','exit-2','split-14d','goal-2','update-profile','audience','exit-3'],
+      dimEdges: ['e6','e7','e8','e9','e10','e11','e12','e13','e14'],
+      comment: 'Robin bought again on day ' + buyDay + '. The split resolves YES — first goal reached. The offer email, coupon, and everything downstream were never sent, because the goal was already achieved.',
+      emails: ['thankyou'],
+      goalReached: 1
+    };
+  }
+
+  if (day === 34) {
+    return {
+      tokenNode: 'split-30d',
+      visitedNodes: ['entry','wait-3d','email-thankyou','split-30d'], visitedEdges: ['e1','e2','e3'],
+      dimNodes: [], dimEdges: [],
+      comment: 'Engagement split resolves: Robin has not purchased in 30 days. Split fires NO — the journey continues.',
+      emails: ['thankyou']
+    };
+  }
+  if (day === 35) {
+    return {
+      tokenNode: 'product-split',
+      visitedNodes: ['entry','wait-3d','email-thankyou','split-30d','product-split'],
+      visitedEdges: ['e1','e2','e3','e6'],
+      dimNodes: [], dimEdges: [],
+      comment: 'Product split: routing on what Robin bought (“' + ROBIN_PURCHASE.cat + '”). The next offer will be category-appropriate, not a generic blast.',
+      emails: ['thankyou']
+    };
+  }
+  if (day === 36) {
+    return {
+      tokenNode: 'coupon',
+      visitedNodes: ['entry','wait-3d','email-thankyou','split-30d','product-split','coupon'],
+      visitedEdges: ['e1','e2','e3','e6','e7'],
+      dimNodes: [], dimEdges: [],
+      comment: 'Coupon node: Activate generates a loyalty reward and attaches it to Robin’s profile, ready for the offer email.',
+      emails: ['thankyou']
+    };
+  }
+
+  var midV  = ['entry','wait-3d','email-thankyou','split-30d','product-split','coupon','email-offer'];
+  var midE  = ['e1','e2','e3','e6','e7','e8'];
+
+  if (day === 37) {
+    return {
+      tokenNode: 'email-offer',
+      visitedNodes: midV, visitedEdges: midE,
+      dimNodes: [], dimEdges: [],
+      comment: 'Email node: Activate sends the next-purchase offer with the loyalty coupon and ' + ROBIN_PURCHASE.cat + '-matched recommendations.',
+      emails: ['thankyou', 'offer']
+    };
+  }
+
+  if (day >= 38 && day < 45) {
+    if (bought14) {
+      return {
+        tokenNode: 'goal-2',
+        visitedNodes: [...midV, 'split-14d', 'goal-2'],
+        visitedEdges: [...midE, 'e9', 'e11'],
+        dimNodes: ['update-profile','audience','exit-3'], dimEdges: ['e10','e12','e13','e14'],
+        comment: 'Robin bought again on day ' + buyDay + '. The 14-day split resolves YES — second goal reached. No further messages.',
+        emails: ['thankyou', 'offer'],
+        goalReached: 2
+      };
+    }
+    return {
+      tokenNode: 'split-14d',
+      visitedNodes: [...midV, 'split-14d'], visitedEdges: [...midE, 'e9'],
+      dimNodes: [], dimEdges: [],
+      comment: 'Engagement split: Activate watches whether Robin purchases within 14 days of the offer.',
+      emails: ['thankyou', 'offer']
+    };
+  }
+
+  // day >= 45
+  if (bought14) {
+    return {
+      tokenNode: 'goal-2',
+      visitedNodes: [...midV, 'split-14d', 'goal-2'],
+      visitedEdges: [...midE, 'e9', 'e11'],
+      dimNodes: ['update-profile','audience','exit-3'], dimEdges: ['e10','e12','e13','e14'],
+      comment: 'The 14-day split resolves YES — second goal reached.',
+      emails: ['thankyou', 'offer'],
+      goalReached: 2
+    };
+  }
+
+  return {
+    tokenNode: 'exit-3',
+    visitedNodes: [...midV, 'split-14d', 'update-profile', 'audience', 'exit-3'],
+    visitedEdges: [...midE, 'e9', 'e12', 'e13', 'e14'],
+    dimNodes: [], dimEdges: ['e10', 'e11'],
+    comment: 'Split resolves NO. Update profile increments Robin’s loyalty score; Audience adds her to the repeat-customers segment; Exit. — This is a demo: in a live journey, the 30-day and 14-day waits run in real time.',
+    emails: ['thankyou', 'offer']
+  };
+}
+
+// ── UC17 page component ───────────────────────────────────────
+window.UC_STAGE['followup-loyalty'] = function UC17Page() {
+  var CE = React.createElement;
+  var useState = React.useState;
+
+  var _day = useState(0);     var day = _day[0];       var setDay = _day[1];
+  var _buy = useState(null);  var buyDay = _buy[0];    var setBuyDay = _buy[1];
+  var _nc  = useState(false); var noConsent = _nc[0];  var setNoConsent = _nc[1];
+  var _bi  = useState('');    var buyInput = _bi[0];   var setBuyInput = _bi[1];
+
+  var ds   = uc17ComputeState(day, buyDay, noConsent);
+  var flow = FOLLOWUP_LOYALTY_FLOW;
+
+  // Email content resolved from ROBIN_PURCHASE (no hard-coded SKUs in flow)
+  var EMAIL_CONTENT = {
+    thankyou: {
+      from: 'Shopler <hello@shopler.com>',
+      subject: 'Thank you, Robin — your ' + ROBIN_PURCHASE.name + ' is on its way',
+      sentDay: 4,
+      lines: [
+        'Hi Robin,',
+        'Your ' + ROBIN_PURCHASE.name + ' left our warehouse today.',
+        'Care tip: ' + ROBIN_PURCHASE.care,
+        'We’re so pleased you chose Shopler. Enjoy it!'
+      ]
+    },
+    offer: {
+      from: 'Shopler <hello@shopler.com>',
+      subject: 'A little something for you, Robin — your loyalty reward inside',
+      sentDay: 37,
+      lines: [
+        'Hi Robin,',
+        'As a thank-you for shopping with us, here’s a loyalty reward: code LOYAL10 gives you 10% off your next order.',
+        ROBIN_RECS[0] ? ('We think you’d love the ' + ROBIN_RECS[0].name + ' (€' + ROBIN_RECS[0].price + ') — a great match with your ' + ROBIN_PURCHASE.name + '.') : '',
+        'Use LOYAL10 at checkout. Valid for 30 days.'
+      ].filter(Boolean)
+    }
+  };
+
+  var NAV1 = [
+    { label: 'Dashboard',       icon: '⊞' },
+    { label: 'Predictive AI',   icon: '★' },
+    { label: 'Personalizations',icon: '▦' },
+    { label: 'Journeys',        icon: '➡', active: true },
+    { label: 'Lifecycles',      icon: '↺' },
+  ];
+  var NAV2 = [
+    { label: 'Audiences',       icon: '●' },
+    { label: 'Products',        icon: '□' },
+    { label: '360° profiles', icon: '◌' },
+    { label: 'Data',            icon: '▽' },
+    { label: 'Apps',            icon: '△' },
+  ];
+  var PAL_ACTIONS = ['Email','Messaging','Audience','Webhook','Trigger','Update profile','Notification','Coupon'];
+  var PAL_OTHER   = ['Wait','Wait until','A-B split','Visitor split','Audience split','Product split','Teleport','Engagement split'];
+
+  // ── Activate sidebar ────────────────────────────────────────
+  var sidebar = CE('div', { style: { width: 180, background: '#0a2540', display: 'flex', flexDirection: 'column', flexShrink: 0, overflow: 'hidden' } },
+    CE('div', { style: { padding: '14px 16px 10px', borderBottom: '1px solid rgba(255,255,255,0.08)', flexShrink: 0 } },
+      CE('div', { style: { fontSize: 17, fontWeight: 700, letterSpacing: '-0.02em' } },
+        CE('span', { style: { color: '#fff' } }, 'spotler'),
+        CE('span', { style: { color: '#23afe6' } }, 'activate')
+      )
+    ),
+    CE('div', { style: { padding: '6px 0', flexShrink: 0 } },
+      ...NAV1.map(function(item) {
+        return CE('div', { key: item.label, style: {
+          padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 8,
+          background: item.active ? '#16375a' : 'transparent',
+          color: item.active ? '#fff' : 'rgba(255,255,255,0.72)',
+          fontSize: 13, cursor: 'default', userSelect: 'none'
+        }},
+          CE('span', { style: { fontSize: 11, opacity: 0.8 } }, item.icon),
+          item.label
+        );
+      })
+    ),
+    CE('div', { style: { height: 1, background: 'rgba(255,255,255,0.12)', margin: '2px 0', flexShrink: 0 } }),
+    CE('div', { style: { padding: '6px 0', flex: 1, overflowY: 'auto' } },
+      ...NAV2.map(function(item) {
+        return CE('div', { key: item.label, style: {
+          padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 8,
+          color: 'rgba(255,255,255,0.72)', fontSize: 13, cursor: 'default', userSelect: 'none'
+        }},
+          CE('span', { style: { fontSize: 11, opacity: 0.8 } }, item.icon),
+          item.label
+        );
+      })
+    ),
+    CE('div', { style: { padding: '10px 16px', borderTop: '1px solid rgba(255,255,255,0.12)', flexShrink: 0 } },
+      CE('div', { style: { color: '#fff', fontSize: 12, fontWeight: 600, marginBottom: 6 } }, 'Shopler'),
+      CE('div', { style: { display: 'inline-flex', alignItems: 'center', gap: 4, background: '#1f5fc4', borderRadius: 100, padding: '3px 10px', fontSize: 11, color: '#fff', fontWeight: 700, cursor: 'default', marginBottom: 8 } }, '⇄ Switch merchant'),
+      CE('div', { style: { color: 'rgba(255,255,255,0.45)', fontSize: 11 } }, 'Erik de Kock')
+    )
+  );
+
+  // ── Editor header ───────────────────────────────────────────
+  var editorHeader = CE('div', { style: { padding: '8px 12px', background: '#fff', borderBottom: '1px solid #e4eaf0', display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 } },
+    CE('div', { style: { fontSize: 14, fontWeight: 700, color: '#1a2b3c' } }, 'Edit Journey'),
+    CE('div', { style: { fontSize: 12, color: '#6b7a89', fontWeight: 400 } }, ' — Post-purchase & loyalty'),
+    CE('div', { style: { marginLeft: 'auto', display: 'flex', gap: 5, alignItems: 'center' } },
+      ['Notes','Settings','Save'].map(function(btn) {
+        return CE('button', { key: btn, style: { border: '1px solid #d8dee4', background: '#fff', borderRadius: 5, padding: '3px 9px', fontSize: 11, fontWeight: 600, cursor: 'default', color: '#1a2b3c' } }, btn);
+      }),
+      CE('button', { style: { border: 'none', background: '#1f5fc4', borderRadius: 5, padding: '3px 10px', fontSize: 11, fontWeight: 700, cursor: 'default', color: '#fff' } }, 'Save & Publish')
+    )
+  );
+
+  // ── Node palette ─────────────────────────────────────────────
+  function palNode(label, isAction) {
+    var color = isAction ? '#1f5fc4' : '#f08a24';
+    var shapeEl = isAction
+      ? CE('div', { style: { width: 18, height: 18, background: color, borderRadius: 4, flexShrink: 0 } })
+      : CE('svg', { width: 20, height: 20, style: { flexShrink: 0, overflow: 'visible' } },
+          CE('polygon', { points: '10,1 19,10 10,19 1,10', fill: color })
+        );
+    return CE('div', { key: label, style: { display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '4px 4px', gap: 3, cursor: 'default' } },
+      shapeEl,
+      CE('div', { style: { fontSize: 8.5, color: '#6b7a89', textAlign: 'center', lineHeight: 1.25, maxWidth: 72 } }, label)
+    );
+  }
+
+  var palette = CE('div', { style: { width: 90, background: '#fff', borderRight: '1px solid #e4eaf0', overflowY: 'auto', flexShrink: 0, padding: '8px 0' } },
+    CE('div', { style: { fontSize: 8.5, fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#6b7a89', padding: '0 8px 4px', borderBottom: '1px solid #f0f4f7', marginBottom: 2 } }, 'Actions'),
+    ...PAL_ACTIONS.map(function(l) { return palNode(l, true); }),
+    CE('div', { style: { fontSize: 8.5, fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#6b7a89', padding: '6px 8px 4px', borderTop: '1px solid #f0f4f7', borderBottom: '1px solid #f0f4f7', marginTop: 2, marginBottom: 2 } }, 'Other'),
+    ...PAL_OTHER.map(function(l) { return palNode(l, false); })
+  );
+
+  // ── Journey canvas ────────────────────────────────────────
+  var canvasEl = CE('div', { className: 'ucjrny-wrap', style: { flex: 1, overflow: 'auto', background: '#fafafa', position: 'relative' } },
+    CE(UcJourneyCanvas, { flow: flow, ds: ds })
+  );
+
+  // ── Full left panel (Activate editor) ────────────────────
+  var leftPanel = CE('div', { style: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' } },
+    CE('div', { style: { display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden' } },
+      sidebar,
+      CE('div', { style: { flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' } },
+        editorHeader,
+        CE('div', { style: { flex: 1, display: 'flex', minHeight: 0, overflow: 'hidden' } },
+          palette,
+          canvasEl
+        )
+      )
+    )
+  );
+
+  // ── Robin's order card ──────────────────────────────────────
+  var orderCard = CE('div', { style: { background: '#fff', border: '1px solid #e4eaf0', borderRadius: 10, padding: '12px 16px', margin: '14px 16px 8px' } },
+    CE('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#6b7a89', marginBottom: 8 } }, 'Trigger order — Day 0'),
+    CE('div', { style: { display: 'flex', alignItems: 'center', gap: 12 } },
+      CE('div', { style: { width: 48, height: 48, background: ROBIN_PURCHASE.color, borderRadius: 8, flexShrink: 0 } }),
+      CE('div', {},
+        CE('div', { style: { fontWeight: 700, color: '#002a4d', fontSize: 13 } }, ROBIN_PURCHASE.name),
+        CE('div', { style: { color: '#23afe6', fontWeight: 700, fontSize: 13 } }, '€' + ROBIN_PURCHASE.price),
+        CE('div', { style: { color: '#6b7a89', fontSize: 11, marginTop: 2 } }, ROBIN.name + ' · ' + ROBIN.email)
+      )
+    )
+  );
+
+  // ── Goal notice ─────────────────────────────────────────────
+  var goalNotice = ds.goalReached ? CE('div', { style: { margin: '0 16px 8px', padding: '10px 14px', background: '#e6f6ea', border: '1px solid #5cd975', borderRadius: 10 } },
+    CE('div', { style: { fontWeight: 700, color: '#2f9e5f', fontSize: 13, marginBottom: 4 } }, '⚑ Goal reached — journey complete'),
+    CE('div', { style: { fontSize: 12, color: '#1f2d3a', lineHeight: 1.5 } }, 'Robin already bought again. Every downstream message was not sent because it was no longer needed. Dimmed paths on the canvas show what was skipped.')
+  ) : null;
+
+  // ── Email inbox ─────────────────────────────────────────────
+  var inboxItems = (ds.emails || []).map(function(key) {
+    var em = EMAIL_CONTENT[key];
+    if (!em) return null;
+    return CE('div', { key: key, style: { background: '#fff', border: '1px solid #e4eaf0', borderRadius: 10, padding: '12px 14px', marginBottom: 8 } },
+      CE('div', { style: { display: 'flex', justifyContent: 'space-between', marginBottom: 2 } },
+        CE('div', { style: { fontSize: 10, color: '#6b7a89' } }, 'From: ', CE('strong', { style: { color: '#002a4d' } }, em.from)),
+        CE('div', { style: { fontSize: 10, color: '#6b7a89' } }, 'Day ' + em.sentDay)
+      ),
+      CE('div', { style: { fontWeight: 700, color: '#002a4d', fontSize: 13, marginBottom: 10, lineHeight: 1.3 } }, em.subject),
+      CE('div', { style: { background: '#fafcfd', borderRadius: 8, padding: '10px 12px', marginBottom: key === 'offer' && ROBIN_RECS.length ? 8 : 0 } },
+        ...em.lines.map(function(line, i) {
+          return CE('div', { key: i, style: { fontSize: 12, color: '#1f2d3a', marginBottom: 4, lineHeight: 1.5 } }, line);
+        })
+      ),
+      key === 'offer' && ROBIN_RECS.length ? CE('div', { style: { display: 'flex', gap: 6, marginTop: 0 } },
+        ...ROBIN_RECS.slice(0, 2).map(function(p) {
+          return CE('div', { key: p.id, style: { flex: 1, background: '#f5f7fa', borderRadius: 8, padding: '8px', textAlign: 'center' } },
+            CE('div', { style: { width: '100%', height: 34, background: p.color, borderRadius: 6, marginBottom: 4 } }),
+            CE('div', { style: { fontSize: 11, fontWeight: 600, color: '#002a4d' } }, p.name),
+            CE('div', { style: { fontSize: 11, color: '#23afe6', fontWeight: 700 } }, '€' + p.price)
+          );
+        })
+      ) : null
+    );
+  });
+
+  var inbox = inboxItems.length === 0
+    ? CE('div', { style: { padding: '20px 16px', color: '#6b7a89', fontSize: 12, textAlign: 'center' } }, 'Inbox is empty — no emails sent yet.')
+    : CE('div', { style: { padding: '0 16px 8px' } },
+        CE('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#6b7a89', marginBottom: 8, marginTop: 8 } }, 'Inbox — Robin Jansen'),
+        ...inboxItems
+      );
+
+  // ── Robin buys again control ─────────────────────────────────
+  var buyAgainCtrl = CE('div', { style: { padding: '12px 16px', borderTop: '1px solid #e4eaf0', background: '#fafcfd', flexShrink: 0 } },
+    CE('div', { style: { fontSize: 11, fontWeight: 700, color: '#002a4d', marginBottom: 6 } }, 'Robin buys again on day …'),
+    CE('div', { style: { display: 'flex', gap: 8, alignItems: 'center' } },
+      CE('input', {
+        type: 'number', min: 1, max: 44, value: buyInput,
+        onChange: function(e) { setBuyInput(e.target.value); },
+        placeholder: 'e.g. 20',
+        style: { width: 72, padding: '5px 8px', border: '1px solid #d8dee4', borderRadius: 6, fontSize: 12, fontFamily: 'inherit' }
+      }),
+      CE('button', {
+        onClick: function() {
+          var n = parseInt(buyInput, 10);
+          if (!isNaN(n) && n >= 1 && n <= 44) setBuyDay(n);
+        },
+        style: { padding: '5px 12px', background: '#002a4d', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: 'pointer' }
+      }, 'Set'),
+      buyDay !== null ? CE('button', {
+        onClick: function() { setBuyDay(null); setBuyInput(''); },
+        style: { padding: '5px 10px', background: '#fff', color: '#6b7a89', border: '1px solid #e4eaf0', borderRadius: 6, fontSize: 11, cursor: 'pointer' }
+      }, 'Clear') : null
+    ),
+    buyDay !== null ? CE('div', { style: { marginTop: 6, fontSize: 11, color: '#429b54', fontWeight: 700 } }, '✓ Robin buys again on day ' + buyDay + '. Set the scrubber past day ' + (buyDay <= 34 ? 5 : 38) + ' to see the split resolve.') : null
+  );
+
+  // ── Right panel assembled ────────────────────────────────────
+  var rightPanel = CE('div', { style: { display: 'flex', flexDirection: 'column', height: '100%' } },
+    orderCard,
+    goalNotice,
+    CE('div', { style: { flex: 1, overflowY: 'auto' } }, inbox),
+    buyAgainCtrl
+  );
+
+  // ── Top bar ──────────────────────────────────────────────────
+  var bench = ucBenchmarkStr('followup-loyalty');
+  var topbar = CE('div', { style: { background: '#fff', borderBottom: '1px solid #e4eaf0', padding: '10px 20px', display: 'flex', alignItems: 'center', gap: 14, flexShrink: 0 } },
+    CE('a', { href: '#', style: { color: '#23afe6', fontWeight: 700, fontSize: 12, textDecoration: 'none' } }, '← Back to menu'),
+    CE('div', { style: { width: 1, height: 18, background: '#e4eaf0' } }),
+    CE('div', { style: { fontSize: 13, fontWeight: 700, color: '#002a4d' } }, ucNameStr('followup-loyalty')),
+    CE('div', { style: { marginLeft: 'auto', display: 'flex', alignItems: 'baseline', gap: 6 } },
+      CE('span', { style: { fontSize: 20, fontWeight: 800, color: '#429b54', letterSpacing: '-0.02em' } }, bench.split(' ')[0]),
+      CE('span', { style: { fontSize: 12, color: '#6b7a89' } }, bench.split(' ').slice(1).join(' '))
+    )
+  );
+
+  // ── Timeline scrubber ────────────────────────────────────────
+  var MARKERS = [0,3,4,5,34,35,36,37,38,45];
+  var scrubber = CE('div', { style: { padding: '14px 20px 10px', background: '#fff', borderTop: '1px solid #e4eaf0', flexShrink: 0 } },
+    CE('div', { style: { display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' } },
+      CE('div', { style: { flex: 1, minWidth: 200 } },
+        CE('div', { style: { display: 'flex', justifyContent: 'space-between', marginBottom: 4 } },
+          CE('span', { style: { fontSize: 10, color: '#6b7a89', fontWeight: 700 } }, 'Day 0'),
+          CE('span', { style: { fontSize: 12, fontWeight: 700, color: '#002a4d' } }, 'Day ' + day),
+          CE('span', { style: { fontSize: 10, color: '#6b7a89', fontWeight: 700 } }, 'Day 45')
+        ),
+        CE('input', {
+          type: 'range', min: 0, max: 45, value: day,
+          className: 'uc17-range',
+          onChange: function(e) { setDay(parseInt(e.target.value, 10)); },
+          style: { width: '100%', accentColor: '#23afe6' }
+        }),
+        CE('div', { style: { display: 'flex', justifyContent: 'space-between', marginTop: 3, position: 'relative' } },
+          MARKERS.map(function(m) {
+            return CE('div', { key: m, style: { fontSize: 9, color: m === day ? '#23afe6' : '#b0bcc6', fontWeight: m === day ? 700 : 400 } }, m);
+          })
+        )
+      ),
+      CE('div', { style: { display: 'flex', gap: 6, alignItems: 'center' } },
+        CE('button', {
+          onClick: function() { setDay(function(d) { return Math.max(0, d - 1); }); },
+          style: { width: 30, height: 30, border: '1px solid #e4eaf0', background: '#fff', borderRadius: 6, cursor: 'pointer', fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center' }
+        }, '‹'),
+        CE('button', {
+          onClick: function() { setDay(function(d) { return Math.min(45, d + 1); }); },
+          style: { width: 30, height: 30, border: '1px solid #e4eaf0', background: '#fff', borderRadius: 6, cursor: 'pointer', fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center' }
+        }, '›'),
+        CE('label', { style: { display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 12, userSelect: 'none' } },
+          CE('input', { type: 'checkbox', checked: noConsent, onChange: function(e) { setNoConsent(e.target.checked); } }),
+          CE('span', { style: { color: '#1f2d3a', fontWeight: 600 } }, 'No email consent')
+        )
+      )
+    )
+  );
+
+  // ── Commentary ───────────────────────────────────────────────
+  var commentary = CE('div', { style: { padding: '8px 20px 10px', background: '#eef2f6', fontSize: 12, color: '#1f2d3a', lineHeight: 1.6, flexShrink: 0 } },
+    CE('span', { style: { fontWeight: 700, color: '#002a4d' } }, 'Day ' + day + ': '),
+    ds.comment || '…'
+  );
+
+  // ── Full page ────────────────────────────────────────────────
+  return CE('div', { style: { height: '100vh', background: '#eef2f6', display: 'flex', flexDirection: 'column', fontFamily: "'Open Sans', system-ui, sans-serif", overflow: 'hidden' } },
+    topbar,
+    CE('div', { className: 'uc17-twin' },
+      CE('div', { className: 'uc17-left' }, leftPanel),
+      CE('div', { className: 'uc17-right' }, rightPanel)
+    ),
+    scrubber,
+    commentary
+  );
+};

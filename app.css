@@ -1,0 +1,69 @@
+/* ==========================================================
+   app.css — demo-page styles
+   ucjrny- prefix: reusable journey canvas (used by UC12, 13, 14, 15, 17)
+   uc17-   prefix: followup-loyalty page specifics
+   ========================================================== */
+
+/* ── Reusable journey canvas ─────────────────────────────── */
+
+.ucjrny-wrap {
+  flex: 1;
+  overflow: auto;
+  background: #fafafa;
+  position: relative;
+}
+
+/* ── UC17 / generic demo page layout ────────────────────── */
+
+.uc17-twin {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.uc17-left {
+  flex: 1 1 50%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid #e4eaf0;
+  overflow: hidden;
+}
+
+.uc17-right {
+  flex: 1 1 50%;
+  min-width: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Below 1100 px: stack canvas → scrubber → inbox */
+@media (max-width: 1099px) {
+  .uc17-twin {
+    flex-direction: column;
+    overflow: visible;
+  }
+  .uc17-left {
+    flex: none;
+    min-height: 520px;
+    border-right: none;
+    border-bottom: 1px solid #e4eaf0;
+  }
+  .uc17-right {
+    flex: none;
+    overflow-y: visible;
+  }
+  /* Canvas area scrolls horizontally so nodes stay legible */
+  .ucjrny-wrap {
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+}
+
+/* Range input accent colour */
+input[type="range"].uc17-range {
+  accent-color: #23afe6;
+}
