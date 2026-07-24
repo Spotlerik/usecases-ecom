@@ -1082,345 +1082,232 @@ const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(React.createElement(App));
 
 // ─── UC02 Profile Enrichment — Shopler demo ──────────────────────────────────
-// Self-contained demo of STAGE["profile-enrichment"]: a Shopler fashion
-// storefront whose product grid is pre-filtered and size-highlighted by a
-// live Spotler Activate 360° profile. Mounts on #uc02-root (shopler.html).
+// Product-detail page where Spotler Activate builds a 360° profile from
+// anonymous visitor browsing signals in real time. Mounts on #uc02-root.
 ;(function () {
   'use strict';
 
-  const FIELDS = ['name', 'price', 'category', 'subcategory', 'color', 'color_name', 'pairs_with', 'sizes'];
-
-  function loadCatalogue() {
-    return window.CATALOGUE || window.DEFAULT_CATALOGUE || [];
-  }
-
-  function uc02Sizes(p) {
-    if (p.sizes) return p.sizes;
-    if (p.category === "Women") {
-      if (p.subcategory === "Shoes") return ["36","37","38","39","40","41"];
-      return ["34","36","38","40","42","44"];
-    }
-    if (p.category === "Men") {
-      if (p.subcategory === "Jeans" || p.subcategory === "Trousers") return ["28","30","32","34","36"];
-      return ["S","M","L","XL"];
-    }
-    return ["One size"];
-  }
-
   window.STAGE = window.STAGE || {};
 
-  // Simulated Spotler Activate 360° profile for the UC02 demo visitor.
-  const DEMO_PROFILE = {
-    name: 'Emma de Vries',
-    email: 'emma@example.com',
-    since: 'January 2024',
-    gender: 'Women',
-    sizeClothing: '38',
-    sizeShoes: '38',
-    loves: ['Shoes', 'Dresses'],
-    clv: '€1.840',
-    orders: 12,
-    daysAgo: 3,
-    segments: ['High CLV', 'Fashion forward', 'Repeat buyer'],
-    recentlyViewed: ['w-shoe-01', 'w-shoe-03', 'w-dress-01'],
+  const PRODUCT = {
+    name: 'Wool-Blend Trench Coat',
+    brand: 'Atelier Ode',
+    subcategory: 'Jackets & Coats',
+    price: 119,
+    was: 169,
+    color: '#c4a882',
+    color_name: 'Camel',
+    stock: 4,
+    description: 'A modern reinterpretation of the classic trench, crafted from a premium Italian wool blend. Fully lined, with a notched collar and adjustable belt.',
+    sizes: ['34', '36', '38', '40', '42', '44'],
   };
 
+  // Recent page views (browsing history thumbnails)
+  const RECENTS = [
+    { color: '#f0d080', name: 'Summer Sundress' },
+    { color: '#2c4a6e', name: 'High-Waist Slim Jeans' },
+    { color: PRODUCT.color, name: PRODUCT.name, active: true },
+  ];
+
+  // Signals Activate picks up from viewing this product page — staggered reveals
+  const SIGNALS = [
+    { key: 'Stage',          value: 'Anonymous visitor',       icon: '👤', delay: 0    },
+    { key: 'Interest',       value: 'Women · Jackets & Coats', icon: '📂', delay: 900  },
+    { key: 'Brand affinity', value: PRODUCT.brand,             icon: '🏷️', delay: 2000 },
+    { key: 'Colour seen',    value: PRODUCT.color_name,        icon: '🎨', delay: 3000 },
+    { key: 'Price band',     value: '€100+',                  icon: '💶', delay: 4000 },
+  ];
+
   window.STAGE['profile-enrichment'] = class ProfileEnrichment extends React.Component {
-    state = {
-      profileActive: true,
-      catalogue: [],
-      selectedCategory: null,
-      openId: null,
-    };
+    constructor(props) {
+      super(props);
+      this.state = { revealed: 0, identified: false, selectedSize: null };
+      this._timers = [];
+    }
 
     componentDidMount() {
-      this.setState({ catalogue: loadCatalogue().map(p => ({ ...p, sizes: uc02Sizes(p) })) });
-      window.addEventListener('keydown', this._onKey = (e) => { if (e.key === 'Escape') this.setState({ openId: null }); });
+      SIGNALS.forEach((sig, i) => {
+        const t = setTimeout(
+          () => this.setState(s => ({ revealed: Math.max(s.revealed, i + 1) })),
+          sig.delay + 400
+        );
+        this._timers.push(t);
+      });
     }
-    componentWillUnmount() { window.removeEventListener('keydown', this._onKey); }
-
-    getFiltered() {
-      const { profileActive, catalogue, selectedCategory } = this.state;
-      const pr = DEMO_PROFILE;
-      let items = catalogue;
-      if (profileActive) {
-        items = items.filter(p => p.category === pr.gender);
-        items = [...items].sort((a, b) => {
-          const al = pr.loves.includes(a.subcategory);
-          const bl = pr.loves.includes(b.subcategory);
-          return (al === bl) ? 0 : al ? -1 : 1;
-        });
-      }
-      if (selectedCategory) items = items.filter(p => p.subcategory === selectedCategory);
-      return items;
-    }
-
-    getCategories() {
-      const { profileActive, catalogue } = this.state;
-      const pool = profileActive ? catalogue.filter(p => p.category === DEMO_PROFILE.gender) : catalogue;
-      return [...new Set(pool.map(p => p.subcategory))];
-    }
+    componentWillUnmount() { this._timers.forEach(clearTimeout); }
 
     render() {
       const R = React.createElement;
-      const { profileActive, openId, selectedCategory, catalogue } = this.state;
-      const pr = DEMO_PROFILE;
-      const filtered = this.getFiltered();
-      const categories = this.getCategories();
+      const { revealed, identified, selectedSize } = this.state;
+      const shownSigs = SIGNALS.slice(0, revealed);
+      const allRevealed = revealed >= SIGNALS.length;
 
-      // ── Helpers ──────────────────────────────────────────────────────────────
-      const profileSize = (p) => p.subcategory === 'Shoes' ? pr.sizeShoes : pr.sizeClothing;
-      const isLoved = (p) => profileActive && pr.loves.includes(p.subcategory);
-
-      // Group filtered products by subcategory for band rendering
-      const bands = categories
-        .filter(cat => !selectedCategory || cat === selectedCategory)
-        .map(cat => ({ cat, items: filtered.filter(p => p.subcategory === cat) }))
-        .filter(b => b.items.length > 0);
-
-      // ── Shopler header ────────────────────────────────────────────────────────
+      // ── Header ──────────────────────────────────────────────────────────────
       const header = R('header', { className: 'sh-header' },
         R('div', { className: 'sh-header__inner' },
           R('a', { href: '#', className: 'sh-logo' }, 'shopl', R('span', null, 'er')),
           R('nav', { className: 'sh-nav' },
-            ['Women', 'Men', 'Sale'].map(n => R('a', {
-              key: n, href: '#',
-              className: (!profileActive || n === pr.gender) ? 'active' : '',
-            }, n)),
+            ['Women', 'Men', 'Sale', 'Brands'].map(n =>
+              R('a', { key: n, href: '#', className: n === 'Women' ? 'active' : '' }, n)
+            ),
+          ),
+          R('div', { className: 'sh-header__icons' },
+            R('span', { className: 'sh-header__icon', title: 'Search' }, '🔍'),
+            R('span', { className: 'sh-header__icon', title: 'Wishlist' }, '♡'),
+            R('span', { className: 'sh-header__icon', title: 'Bag' }, '◻'),
           ),
         ),
       );
 
-      // ── Activate banner ───────────────────────────────────────────────────────
-      const banner = R('div', { className: profileActive ? 'act-banner' : 'act-banner act-banner--off' },
-        R('div', { className: 'act-banner__inner' },
-          R('div', { className: 'act-banner__dot' }),
-          R('div', { className: 'act-banner__text' },
-            profileActive
-              ? R('span', null, 'Welkom terug, ', R('strong', null, pr.name), ' — jouw Shopler is gepersonaliseerd op basis van jouw ', R('span', { className: 'act-banner__badge' }, '⚡ Activate 360° profiel'))
-              : R('span', null, 'Browsen als anonieme bezoeker — ', R('strong', null, 'Spotler Activate profiel staat uit')),
+      // ── Breadcrumb ───────────────────────────────────────────────────────────
+      const breadcrumb = R('nav', { className: 'sh-breadcrumb', 'aria-label': 'breadcrumb' },
+        R('div', { className: 'sh-breadcrumb__inner' },
+          ['Women', 'Jackets & Coats', PRODUCT.name].map((c, i, arr) =>
+            R('span', { key: c },
+              R('a', { href: '#', className: 'sh-breadcrumb__link' }, c),
+              i < arr.length - 1 ? R('span', { className: 'sh-breadcrumb__sep' }, ' / ') : null,
+            )
           ),
-          R('button', {
-            className: 'act-banner__toggle',
-            onClick: () => this.setState({ profileActive: !profileActive, selectedCategory: null }),
-          }, profileActive ? 'Profiel uitzetten' : 'Profiel aanzetten'),
         ),
+      );
+
+      // ── Product image col ────────────────────────────────────────────────────
+      const imageCol = R('div', { className: 'sh-pdp__image-col' },
+        R('div', { className: 'sh-pdp__image', style: { background: PRODUCT.color } },
+          R('div', { className: 'sh-pdp__brand-badge' }, PRODUCT.brand),
+          R('div', { className: 'sh-pdp__urgency' },
+            R('span', { className: 'sh-pdp__urgency-dot' }),
+            'Only ', R('strong', null, String(PRODUCT.stock)), ' left',
+          ),
+        ),
+        R('div', { className: 'sh-pdp__thumbs' },
+          RECENTS.map((r, i) =>
+            R('div', {
+              key: i,
+              className: 'sh-pdp__thumb' + (r.active ? ' active' : ''),
+              style: { background: r.color },
+              title: r.name,
+            })
+          ),
+        ),
+      );
+
+      // ── Product info col ─────────────────────────────────────────────────────
+      const infoCol = R('div', { className: 'sh-pdp__info-col' },
+        R('div', { className: 'sh-pdp__brand' }, PRODUCT.brand),
+        R('h1', { className: 'sh-pdp__name' }, PRODUCT.name),
+        R('div', { className: 'sh-pdp__prices' },
+          R('span', { className: 'sh-pdp__price' }, '€' + PRODUCT.price),
+          R('span', { className: 'sh-pdp__was' }, 'was €' + PRODUCT.was),
+        ),
+        R('div', { className: 'sh-pdp__color-row' },
+          R('div', { className: 'sh-pdp__color-swatch', style: { background: PRODUCT.color } }),
+          R('span', null, PRODUCT.color_name),
+        ),
+        R('div', { className: 'sh-pdp__label' }, 'Select size'),
+        R('div', { className: 'sh-pdp__sizes' },
+          PRODUCT.sizes.map(sz =>
+            R('button', {
+              key: sz,
+              className: 'sh-pdp__size' + (selectedSize === sz ? ' active' : ''),
+              onClick: () => this.setState({ selectedSize: sz }),
+            }, sz)
+          ),
+        ),
+        R('p', { className: 'sh-pdp__desc' }, PRODUCT.description),
+        R('button', { className: 'sh-pdp__cta' }, 'Add to bag'),
       );
 
       // ── Activate profile panel ────────────────────────────────────────────────
-      const recentItems = pr.recentlyViewed.map(id => catalogue.find(p => p.id === id)).filter(Boolean);
-
-      const profilePanel = profileActive
-        ? R('aside', { className: 'act-panel' },
-            R('div', { className: 'act-panel__header' },
-              R('span', { className: 'act-panel__logo' }, 'Spotler Activate'),
-              R('span', { className: 'act-panel__crumb' }, '/ Profiel'),
+      const profilePanel = R('aside', { className: 'act-panel' },
+        R('div', { className: 'act-panel__head' },
+          R('div', { className: 'act-panel__head-top' },
+            R('span', { className: 'act-panel__brand' }, 'Spotler Activate'),
+            R('span', { className: 'act-panel__live' + (allRevealed ? ' act-panel__live--done' : '') },
+              allRevealed ? '✓ enriched' : '⚡ live',
             ),
-            R('div', { className: 'act-panel__body' },
-              R('div', { className: 'act-panel__avatar' },
-                R('div', { className: 'act-panel__pic' }, '👤'),
-                R('div', null,
-                  R('div', { className: 'act-panel__name' }, pr.name),
-                  R('div', { className: 'act-panel__email' }, pr.email + ' · klant sinds ' + pr.since),
-                ),
-              ),
-              R('div', { className: 'act-panel__stats' },
-                [['CLV', pr.clv], ['Bestellingen', pr.orders], ['Segment', 'Fashion fwd'], ['Laatste bezoek', pr.daysAgo + 'd geleden']].map(([k, v]) =>
-                  R('div', { key: k, className: 'act-stat' },
-                    R('div', { className: 'act-stat__label' }, k),
-                    R('div', { className: 'act-stat__value' }, v),
-                  )
-                ),
-              ),
-              R('div', { className: 'act-panel__section' },
-                R('div', { className: 'act-panel__section-label' }, 'Actieve profieldata'),
-                R('div', { className: 'act-trait' },
-                  R('span', { className: 'act-trait__icon' }, '👤'),
-                  R('span', { className: 'act-trait__key' }, 'Geslacht'),
-                  R('span', { className: 'act-trait__val' }, pr.gender),
-                ),
-                R('div', { className: 'act-trait' },
-                  R('span', { className: 'act-trait__icon' }, '👗'),
-                  R('span', { className: 'act-trait__key' }, 'Maat kleding'),
-                  R('span', { className: 'act-trait__val' }, pr.sizeClothing),
-                ),
-                R('div', { className: 'act-trait' },
-                  R('span', { className: 'act-trait__icon' }, '👟'),
-                  R('span', { className: 'act-trait__key' }, 'Maat schoenen'),
-                  R('span', { className: 'act-trait__val' }, pr.sizeShoes),
-                ),
-                R('div', { className: 'act-trait' },
-                  R('span', { className: 'act-trait__icon' }, '❤️'),
-                  R('span', { className: 'act-trait__key' }, 'Favorieten'),
-                  R('span', { className: 'act-trait__val' }, pr.loves.join(', ')),
-                ),
-              ),
-              R('div', { className: 'act-panel__section' },
-                R('div', { className: 'act-panel__section-label' }, 'Segmenten'),
-                R('div', { className: 'act-pills' },
-                  pr.segments.map((s, i) => R('span', { key: i, className: i === 0 ? 'act-pill' : 'act-pill act-pill--muted' }, s)),
-                ),
-              ),
-              recentItems.length > 0 && R('div', { className: 'act-panel__section' },
-                R('div', { className: 'act-panel__section-label' }, 'Recent bekeken'),
-                R('div', { className: 'act-panel__recently' },
-                  recentItems.map(p => R('div', {
-                    key: p.id, className: 'act-recent-swatch',
-                    style: { background: p.color },
-                    title: p.name,
-                  })),
-                ),
-              ),
-            ),
-            R('div', { className: 'act-panel__footer' },
-              '⚡ Profieldata bijgewerkt op basis van 12 sessies en 7 aankopen. Activate synct real-time.',
-            ),
-          )
-        : R('div', { className: 'sh-panel--offline' },
-            R('div', { className: 'sh-panel--offline__icon' }, '👤'),
-            R('div', { className: 'sh-panel--offline__title' }, 'Geen profiel herkend'),
-            R('div', { className: 'sh-panel--offline__text' }, 'Zet het Activate profiel aan om te zien hoe de productpagina zich aanpast aan de bekende klantdata.'),
-          );
-
-      // ── Filter bar ────────────────────────────────────────────────────────────
-      const toolbar = R('div', { className: 'sh-listing__toolbar' },
-        R('div', { className: 'sh-listing__count' },
-          R('strong', null, filtered.length), ' producten',
-          profileActive ? R('span', null, ' · gefilterd op jouw profiel ⚡') : null,
+          ),
+          R('div', { className: 'act-panel__heading' }, 'Profile forming from behaviour'),
+          R('div', { className: 'act-panel__subhead' },
+            identified
+              ? 'Customer identified — full 360° profile now active.'
+              : 'Visitor is anonymous. Activate enriches the profile from page behaviour in real time.',
+          ),
         ),
-        R('div', { className: 'sh-filters' },
+        R('div', { className: 'act-signals' },
+          shownSigs.map((sig, i) =>
+            R('div', {
+              key: sig.key,
+              className: 'act-signal' + (i === shownSigs.length - 1 && !allRevealed ? ' act-signal--entering' : ''),
+            },
+              R('span', { className: 'act-signal__icon' }, sig.icon),
+              R('div', { className: 'act-signal__body' },
+                R('div', { className: 'act-signal__key' }, sig.key),
+                R('div', { className: 'act-signal__val' },
+                  identified && sig.key === 'Stage' ? 'Identified customer' : sig.value
+                ),
+              ),
+              R('span', { className: 'act-signal__check' }, '✓'),
+            )
+          ),
+          !allRevealed && R('div', { className: 'act-signal act-signal--loading' },
+            R('span', { className: 'act-signal__spinner' }),
+            R('div', { className: 'act-signal__body' },
+              R('div', { className: 'act-signal__key' }, 'Detecting signals…'),
+              R('div', { className: 'act-signal__val act-signal__val--muted' }, 'analysing page content'),
+            ),
+          ),
+        ),
+        allRevealed && !identified && R('div', { className: 'act-panel__action' },
           R('button', {
-            className: 'sh-filter-chip' + (!selectedCategory ? ' active' : ''),
-            onClick: () => this.setState({ selectedCategory: null }),
-          }, 'Alles'),
-          categories.map(cat => R('button', {
-            key: cat,
-            className: 'sh-filter-chip' +
-              (selectedCategory === cat ? ' active' : '') +
-              (profileActive && pr.loves.includes(cat) ? ' act-driven' : ''),
-            onClick: () => this.setState({ selectedCategory: selectedCategory === cat ? null : cat }),
-          }, cat)),
+            className: 'act-panel__identify-btn',
+            onClick: () => this.setState({ identified: true }),
+          }, 'Simulate customer log-in →'),
+        ),
+        identified && R('div', { className: 'act-panel__identified' },
+          R('div', { className: 'act-panel__identified-icon' }, '⚡'),
+          R('div', null,
+            R('strong', { className: 'act-panel__identified-name' }, 'Emma de Vries'),
+            R('div', { className: 'act-panel__identified-detail' }, 'High CLV · size 38 · Fashion forward'),
+          ),
+        ),
+        R('div', { className: 'act-panel__foot' },
+          R('span', { className: 'act-panel__foot-stat' }, '17%'),
+          ' less wasted spend — Spotler Activate',
         ),
       );
 
-      // ── Product card ──────────────────────────────────────────────────────────
-      const renderCard = (p) => {
-        const loved = isLoved(p);
-        const mySize = profileActive ? profileSize(p) : null;
-        return R('article', {
-          key: p.id,
-          className: 'sh-card' + (loved ? ' sh-card--loved' : ''),
-          onClick: () => this.setState({ openId: p.id }),
-          tabIndex: 0,
-          onKeyDown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this.setState({ openId: p.id }); } },
-        },
-          R('div', { className: 'sh-card__image' },
-            R('div', { className: 'sh-card__color-bg', style: { background: p.color } }),
-            R('div', { className: 'sh-card__subcategory-label' }, p.subcategory),
-            loved && R('div', { className: 'sh-card__loved-badge' }, '⚡ Jouw stijl'),
-          ),
-          R('div', { className: 'sh-card__body' },
-            R('div', { className: 'sh-card__name' }, p.name),
-            R('div', { className: 'sh-card__color' }, p.color_name),
-            R('div', { className: 'sh-card__price' }, '€' + p.price),
-            R('div', { className: 'sh-card__sizes' },
-              p.sizes.map(sz => R('span', {
-                key: sz,
-                className: 'sh-size' + (mySize && sz === mySize ? ' sh-size--match' : ''),
-                title: mySize && sz === mySize ? 'Jouw maat' : '',
-              }, sz)),
-            ),
-          ),
-        );
-      };
-
-      // ── Product bands ─────────────────────────────────────────────────────────
-      const bandsEl = bands.map(({ cat, items }) =>
-        R('div', { key: cat, className: 'sh-band' },
-          R('div', { className: 'sh-band__heading' },
-            R('div', { className: 'sh-band__title' }, cat),
-            R('div', { className: 'sh-band__count' }, items.length + ' items'),
-            R('div', { className: 'sh-band__line' }),
-          ),
-          R('div', { className: 'sh-grid' }, items.map(renderCard)),
-        )
+      // ── Activate overlay (bottom-right) ──────────────────────────────────────
+      const overlay = R('div', { className: 'act-overlay' },
+        R('div', { className: 'act-overlay__top' },
+          R('span', { className: 'act-overlay__logo' }, 'SPOTLER ACTIVATE'),
+          R('span', { className: 'act-overlay__uc' }, 'USE CASE 02'),
+        ),
+        R('div', { className: 'act-overlay__claim' }, 'Build richer customer profiles'),
+        R('p', { className: 'act-overlay__body' },
+          'Know what they want before they tell you. ',
+          R('mark', null, '17% less wasted spend'),
+          ' — enriched from 360° customer profile in Spotler Activate.',
+        ),
+        R('div', { className: 'act-overlay__nav' },
+          R('button', { className: 'act-overlay__nav-btn' }, '← UC 01'),
+          R('button', { className: 'act-overlay__nav-btn act-overlay__nav-btn--next' }, 'UC 03 →'),
+        ),
       );
 
-      // ── Product drawer ────────────────────────────────────────────────────────
-      let drawer = null;
-      if (openId) {
-        const p = catalogue.find(x => x.id === openId);
-        if (p) {
-          const mySize = profileActive ? profileSize(p) : null;
-          const pairs = (p.pairs_with || []).map(id => catalogue.find(x => x.id === id)).filter(Boolean);
-          const loved = isLoved(p);
-          drawer = R('div', {
-            className: 'sh-drawer-backdrop',
-            onClick: (e) => { if (e.target === e.currentTarget) this.setState({ openId: null }); },
-          },
-            R('div', { className: 'sh-drawer' },
-              R('div', { className: 'sh-drawer__header' },
-                R('div', null,
-                  R('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#888', marginBottom: 2 } }, p.subcategory + ' · ' + p.color_name),
-                  R('div', { className: 'sh-drawer__name' }, p.name),
-                ),
-                R('button', { className: 'sh-drawer__close', onClick: () => this.setState({ openId: null }), 'aria-label': 'Sluiten' }, '×'),
-              ),
-              R('div', { className: 'sh-drawer__body' },
-                R('div', { className: 'sh-drawer__swatch', style: { background: p.color } }),
-                R('div', { className: 'sh-drawer__sub' }, p.category + ' / ' + p.subcategory),
-                R('div', { className: 'sh-drawer__price' }, '€' + p.price),
-                profileActive && mySize && R('div', { className: 'sh-drawer__act-hint' },
-                  '⚡ ',
-                  R('span', null, 'Activate weet dat jouw maat ', R('strong', null, mySize), ' is — die is hieronder al gemarkeerd.'),
-                ),
-                loved && R('div', { className: 'sh-drawer__act-hint', style: { background: '#e6f6fc', borderColor: '#cde9f5' } },
-                  '❤️ ',
-                  R('span', null, R('strong', null, p.subcategory), ' staan in jouw favoriete categorieën.'),
-                ),
-                R('div', { className: 'sh-drawer__section-label' }, 'Maten'),
-                R('div', { className: 'sh-drawer__sizes' },
-                  p.sizes.map(sz => R('div', {
-                    key: sz,
-                    className: 'sh-drawer__size' + (mySize && sz === mySize ? ' sh-drawer__size--match' : ''),
-                  }, sz)),
-                ),
-                pairs.length > 0 && R('div', null,
-                  R('div', { className: 'sh-drawer__section-label' }, 'Combineert goed met'),
-                  R('div', { className: 'sh-drawer__pairs' },
-                    pairs.map(pp => R('div', {
-                      key: pp.id,
-                      className: 'sh-drawer__pair-card',
-                      onClick: (e) => { e.stopPropagation(); this.setState({ openId: pp.id }); },
-                    },
-                      R('div', { className: 'sh-drawer__pair-swatch', style: { background: pp.color } }),
-                      R('div', { className: 'sh-drawer__pair-info' },
-                        R('div', { className: 'sh-drawer__pair-name' }, pp.name),
-                        R('div', { className: 'sh-drawer__pair-price' }, '€' + pp.price),
-                      ),
-                    )),
-                  ),
-                ),
-                R('button', { className: 'sh-drawer__cta' }, 'In winkelwagen'),
-              ),
-            ),
-          );
-        }
-      }
-
-      return R('div', null, header, banner,
-        R('div', { className: 'sh-main' }, profilePanel,
-          R('div', { className: 'sh-listing' }, toolbar, bandsEl),
+      return R('div', null,
+        header, breadcrumb,
+        R('main', { className: 'sh-pdp' },
+          R('div', { className: 'sh-pdp__left' }, imageCol, infoCol),
+          profilePanel,
         ),
-        drawer,
+        overlay,
       );
     }
   };
 
-  // Mount when shopler.html provides the #uc02-root container.
   const uc02Root = document.getElementById('uc02-root');
   if (uc02Root) {
-    const uc02ReactRoot = ReactDOM.createRoot(uc02Root);
-    uc02ReactRoot.render(React.createElement(window.STAGE['profile-enrichment']));
+    ReactDOM.createRoot(uc02Root).render(React.createElement(window.STAGE['profile-enrichment']));
   }
 })();
